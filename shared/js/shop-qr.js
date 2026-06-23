@@ -10,10 +10,13 @@ FOS.shopQr = {
   appBaseUrl() {
     const base = FOS.appUrls?.publicBase?.();
     if (base) return base;
-    const path = location.pathname || '';
-    const idx = path.indexOf('/apps/');
-    const root = idx >= 0 ? path.slice(0, idx) : '';
-    return `${location.origin}${root}`;
+    if (!FOS.appUrls?.isLocalOrigin?.(location.origin)) {
+      const path = location.pathname || '';
+      const idx = path.indexOf('/apps/');
+      const root = idx >= 0 ? path.slice(0, idx) : '';
+      return `${location.origin}${root}`;
+    }
+    return FOS.appUrls?.normalizeBase?.(FOS.CONFIG.PUBLIC_APP_BASE_URL || '') || '';
   },
 
   buildOrderLoginUrl({ shopId, merchantId } = {}) {
@@ -91,25 +94,92 @@ FOS.shopQr = {
     }
   },
 
+  async copyLink(text) {
+    const value = String(text || '').trim();
+    if (!value) return false;
+
+    try {
+      const { Clipboard } = window.Capacitor?.Plugins || {};
+      if (Clipboard?.write) {
+        await Clipboard.write({ string: value });
+        return true;
+      }
+    } catch {
+      /* try next */
+    }
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        return true;
+      }
+    } catch {
+      /* try next */
+    }
+
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, value.length);
+    let ok = false;
+    try {
+      ok = document.execCommand('copy');
+    } catch {
+      ok = false;
+    }
+    ta.remove();
+    return ok;
+  },
+
   async downloadPng(text, filename) {
     const canvas = document.createElement('canvas');
     const ok = await FOS.shopQr.renderToCanvas(canvas, text);
-    const finish = (blob) => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = filename || 'shop-qr.png';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 3000);
-    };
+    let blob = null;
     if (ok) {
-      return new Promise((resolve) => {
-        canvas.toBlob((blob) => {
-          if (blob) finish(blob);
-          resolve();
-        }, 'image/png');
+      blob = await new Promise((resolve) => {
+        canvas.toBlob(resolve, 'image/png');
       });
     }
-    const res = await fetch(FOS.shopQr.fallbackImageUrl(text, 320));
-    finish(await res.blob());
+    if (!blob) {
+      const res = await fetch(FOS.shopQr.fallbackImageUrl(text, 320));
+      blob = await res.blob();
+    }
+    if (!blob) throw new Error('QR image failed');
+
+    const safeName = (filename || 'shop-qr.png').replace(/[^\w.\-]/g, '_');
+    if (!safeName.toLowerCase().endsWith('.png')) {
+      return FOS.shopQr.downloadPng(text, `${safeName}.png`);
+    }
+
+    if (FOS.native?.downloadImageBlob) {
+      const saved = await FOS.native.downloadImageBlob(blob, safeName);
+      if (saved) return;
+    }
+
+    if (navigator.share) {
+      try {
+        const file = new File([blob], safeName, { type: 'image/png' });
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: safeName });
+          return;
+        }
+      } catch (e) {
+        if (e?.name === 'AbortError') return;
+      }
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = safeName;
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
   },
 };

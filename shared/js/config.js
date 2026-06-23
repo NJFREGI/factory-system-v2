@@ -43,8 +43,7 @@ FOS.CONFIG = {
 
   /**
    * 顾客下单 H5 公网基址（无尾斜杠）。
-   * 管理端 APK 生成二维码时必须配置；也可在「设置 → 顾客下单渠道」中填写。
-   * 例：https://example.com/factory-system-v2
+   * 部署时由开发者在 config.js 配置，商家无需在设置中填写。
    */
-  PUBLIC_APP_BASE_URL: '',
+  PUBLIC_APP_BASE_URL: 'https://shop.njfregi.jp',
 };

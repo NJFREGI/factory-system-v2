@@ -2743,6 +2743,24 @@ html.fos-scroll-lock body {
   color: var(--text-tertiary);
   margin-bottom: 12px;
 }
+.settings-banner {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.settings-banner--warn {
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+}
+.settings-panel__hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
 .settings-panels {
   display: flex;
   flex-direction: column;

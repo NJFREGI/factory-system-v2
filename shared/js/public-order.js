@@ -153,15 +153,11 @@ FOS.publicOrder = {
 
   buildOrderUrl({ merchantId, channelId, mode, settlement, shopId } = {}) {
     const base = FOS.appUrls?.publicBase?.() || '';
-    let url;
-    if (base) {
-      url = new URL(`${base}/apps/customer-order/`);
-    } else {
-      const path = location.pathname || '';
-      const idx = path.indexOf('/apps/');
-      const root = idx >= 0 ? path.slice(0, idx) : '';
-      url = new URL(`${location.origin}${root}/apps/customer-order/`);
+    if (!base) {
+      FOS.appUrls?.requirePublicBase?.();
+      throw new Error('public_h5_base_url_missing');
     }
+    const url = new URL(`${base}/apps/customer-order/`);
     if (merchantId) url.searchParams.set('merchant', merchantId);
     if (channelId) url.searchParams.set('channel', channelId);
     if (mode) url.searchParams.set('mode', mode);
@@ -242,15 +238,11 @@ FOS.publicOrder = {
   buildLookupUrl(loc = window.location) {
     const parsed = FOS.publicOrder.parseFromLocation(loc);
     const base = FOS.appUrls?.publicBase?.(loc) || '';
-    let url;
-    if (base) {
-      url = new URL(`${base}/apps/customer-order/`);
-    } else {
-      const path = loc.pathname || '';
-      const idx = path.indexOf('/apps/');
-      const root = idx >= 0 ? path.slice(0, idx) : '';
-      url = new URL(`${loc.origin}${root}/apps/customer-order/`);
+    if (!base) {
+      FOS.appUrls?.requirePublicBase?.();
+      throw new Error('public_h5_base_url_missing');
     }
+    const url = new URL(`${base}/apps/customer-order/`);
     url.searchParams.set('view', 'lookup');
     if (parsed.merchantId) url.searchParams.set('merchant', parsed.merchantId);
     if (parsed.channelId) url.searchParams.set('channel', parsed.channelId);

@@ -3101,8 +3101,9 @@
     }));
   }
 
-  function settingsPanelHtml(id, icon, title, bodyHtml) {
-    return `<details class="settings-panel" data-settings-panel="${id}">
+  function settingsPanelHtml(id, icon, title, bodyHtml, { open = false } = {}) {
+    const openAttr = open ? ' open' : '';
+    return `<details class="settings-panel" data-settings-panel="${id}"${openAttr}>
       <summary class="settings-panel__head">
         <span class="settings-panel__icon">${icon}</span>
         <span class="settings-panel__title">${title}</span>
@@ -3117,7 +3118,6 @@
     await FOS.cutoff.load();
     await FOS.orderSettings.load();
     await FOS.appUrls.loadPublicBase();
-    const publicH5BaseUrl = FOS.appUrls.publicBase();
     const invoiceProfile = await FOS.invoiceSettings.load();
     await loadShops();
     const schemaReady = await FOS.payment.isSchemaReady();
@@ -3191,12 +3191,6 @@
             </label>
             <button type="button" class="btn btn--primary btn--sm" id="saveInvoiceSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`)}
           ${settingsPanelHtml('channels', '📲', FOS.i18n.t('顧客注文チャンネル', '顾客下单渠道'), `
-            <label class="field">
-              <span class="field__label">${FOS.i18n.t('顧客注文リンク', '顾客下单链接域名')}</span>
-              <input class="field__input" id="publicH5BaseUrl" value="${FOS.fmt.escapeHtml(publicH5BaseUrl)}" placeholder="https://your-domain.com/factory-system-v2" autocomplete="off">
-              <span class="shop-qr-modal__hint">${FOS.i18n.t('QRコード用の公開URL。APKから生成する場合は必須です。', '扫码下单二维码的公网地址，从手机 APK 生成时必填')}</span>
-            </label>
-            <button type="button" class="btn btn--primary btn--sm" id="savePublicH5BaseUrlBtn">${FOS.i18n.t('リンクを保存', '保存链接')}</button>
             <div class="settings-panel__toolbar">
               <button type="button" class="btn btn--primary btn--sm" id="openAddChannelBtn">＋ ${FOS.i18n.t('チャンネル追加', '添加渠道')}</button>
             </div>
@@ -3272,18 +3266,6 @@
     });
     document.getElementById('openAddShopBtn').addEventListener('click', openAddShopModal);
     document.getElementById('openAddChannelBtn')?.addEventListener('click', openAddChannelModal);
-    document.getElementById('savePublicH5BaseUrlBtn')?.addEventListener('click', async () => {
-      const value = document.getElementById('publicH5BaseUrl')?.value || '';
-      FOS.ui.showLoading();
-      try {
-        await FOS.appUrls.savePublicBase(value);
-        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
-      } catch (e) {
-        FOS.ui.toast(e.message, 'error');
-      } finally {
-        FOS.ui.hideLoading();
-      }
-    });
   }
 
   async function loadChannels() {
@@ -3420,9 +3402,29 @@
     return active?.id || channels[0]?.id || '';
   }
 
+  function bindQrModalActions({ copyBtnId, downloadBtnId, url, downloadName }) {
+    document.getElementById(copyBtnId)?.addEventListener('click', async () => {
+      const ok = await FOS.shopQr.copyLink(url);
+      if (ok) {
+        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
+      } else {
+        FOS.ui.toast(FOS.i18n.t('コピーに失敗しました', '复制失败'), 'error');
+      }
+    });
+    document.getElementById(downloadBtnId)?.addEventListener('click', async () => {
+      try {
+        await FOS.shopQr.downloadPng(url, downloadName);
+        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+      } catch (e) {
+        FOS.ui.toast(e?.message || FOS.i18n.t('保存に失敗しました', '保存失败'), 'error');
+      }
+    });
+  }
+
   async function openChannelQrModal(channelId) {
     const ch = channels.find((c) => String(c.id) === String(channelId));
     if (!ch) return;
+    await FOS.appUrls.loadPublicBase();
     if (!FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
@@ -3448,25 +3450,18 @@
     });
     const canvas = document.getElementById('channelQrCanvas');
     await FOS.shopQr.paintQr(canvas, url);
-    document.getElementById('copyChannelQrUrl')?.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      } catch {
-        document.getElementById('channelQrUrl')?.select();
-        document.execCommand('copy');
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      }
-    });
-    document.getElementById('downloadChannelQrBtn')?.addEventListener('click', async () => {
-      await FOS.shopQr.downloadPng(url, `guest-qr_${ch.id}.png`);
-      FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+    bindQrModalActions({
+      copyBtnId: 'copyChannelQrUrl',
+      downloadBtnId: 'downloadChannelQrBtn',
+      url,
+      downloadName: `guest-qr_${ch.id}.png`,
     });
   }
 
   async function openShopMonthlyOrderQrModal(shopId) {
     const shop = shops.find((s) => String(s.id) === String(shopId));
     if (!shop) return;
+    await FOS.appUrls.loadPublicBase();
     if (!FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
@@ -3496,19 +3491,11 @@
         </div>`,
     });
     await FOS.shopQr.paintQr(document.getElementById('shopMonthlyQrCanvas'), url);
-    document.getElementById('copyShopMonthlyQrUrl')?.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      } catch {
-        document.getElementById('shopMonthlyQrUrl')?.select();
-        document.execCommand('copy');
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      }
-    });
-    document.getElementById('downloadShopMonthlyQrBtn')?.addEventListener('click', async () => {
-      await FOS.shopQr.downloadPng(url, `monthly-order-qr_${shop.id}.png`);
-      FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+    bindQrModalActions({
+      copyBtnId: 'copyShopMonthlyQrUrl',
+      downloadBtnId: 'downloadShopMonthlyQrBtn',
+      url,
+      downloadName: `monthly-order-qr_${shop.id}.png`,
     });
   }
 
@@ -3681,6 +3668,7 @@
   async function openShopQrModal(shopId) {
     const shop = shops.find((s) => String(s.id) === String(shopId));
     if (!shop) return;
+    await FOS.appUrls.loadPublicBase();
     if (!FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
@@ -3706,20 +3694,11 @@
     });
     const canvas = document.getElementById('shopQrCanvas');
     await FOS.shopQr.paintQr(canvas, url);
-    document.getElementById('copyShopQrUrl')?.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(url);
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      } catch {
-        const input = document.getElementById('shopQrUrl');
-        input?.select();
-        document.execCommand('copy');
-        FOS.ui.toast(FOS.i18n.t('コピーしました', '已复制'), 'success');
-      }
-    });
-    document.getElementById('downloadShopQrBtn')?.addEventListener('click', async () => {
-      await FOS.shopQr.downloadPng(url, `order-qr_${shop.id}.png`);
-      FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+    bindQrModalActions({
+      copyBtnId: 'copyShopQrUrl',
+      downloadBtnId: 'downloadShopQrBtn',
+      url,
+      downloadName: `order-qr_${shop.id}.png`,
     });
   }
 
