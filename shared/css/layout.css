@@ -1,0 +1,515 @@
+/* App shell — Shopify Admin sidebar + mobile bottom nav */
+
+.fos-app {
+  display: flex;
+  min-height: 100dvh;
+}
+
+/* Sidebar */
+.fos-sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--sidebar-w);
+  height: 100dvh;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 200;
+  transition: transform var(--transition);
+}
+
+.fos-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.fos-sidebar__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius);
+  background: var(--accent-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: var(--accent);
+}
+.fos-sidebar__icon .fos-nav-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--accent);
+}
+.fos-sidebar__icon .fos-nav-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.fos-sidebar__title {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.fos-sidebar__sub {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.fos-sidebar__nav {
+  flex: 1;
+  padding: 12px 10px;
+  overflow-y: auto;
+}
+
+.fos-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 2px;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  min-height: var(--touch-min);
+  transition: background var(--transition), color var(--transition);
+}
+
+.fos-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.fos-nav-item.active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fos-nav-item__icon,
+.fos-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.fos-nav-icon svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+}
+.fos-nav-icon--emoji {
+  font-size: 18px;
+  line-height: 1;
+  filter: grayscale(1);
+  opacity: 0.72;
+}
+.fos-nav-item.active .fos-nav-icon:not(.fos-nav-icon--emoji) {
+  color: var(--accent);
+}
+.fos-nav-item__label {
+  min-width: 0;
+}
+
+.fos-nav-item__badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--accent);
+  color: var(--accent-text);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
+.fos-sidebar__footer {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.fos-sidebar__ext {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* Main area */
+.fos-main {
+  flex: 1;
+  margin-left: var(--sidebar-w);
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  min-width: 0;
+}
+
+.fos-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.fos-topbar__menu {
+  display: none;
+  width: var(--touch-min);
+  height: var(--touch-min);
+  border: none;
+  border-radius: var(--radius);
+  background: var(--bg-subtle);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.fos-topbar__title {
+  font-size: 15px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fos-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.fos-content {
+  flex: 1;
+  padding: 20px;
+  max-width: var(--content-max);
+  width: 100%;
+  margin: 0 auto;
+}
+[data-app='admin'] .fos-content:has(.orders-page),
+[data-app='admin'] .fos-content:has(.summary-page),
+[data-app='admin'] .fos-content:has(.invoices-page),
+[data-app='admin'] .fos-content:has(.settings-page) {
+  padding-top: 14px;
+}
+
+/* Bottom nav (mobile) */
+.fos-bottom-nav {
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: var(--bottom-nav-h);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  z-index: 200;
+  padding: 0 8px;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.fos-bottom-nav__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: var(--touch-min);
+  min-width: 0;
+  padding: 4px 2px;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.fos-bottom-nav__item.active .fos-bottom-nav__label {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.fos-bottom-nav__item .fos-nav-icon {
+  color: #b5b4b1;
+}
+
+.fos-bottom-nav__item.active .fos-nav-icon {
+  color: #9b9a97;
+}
+
+.fos-bottom-nav__label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  line-height: 1.2;
+}
+
+/* Mobile / tablet — bottom nav only, no hamburger */
+@media (max-width: 1023px) {
+  .fos-sidebar {
+    transform: translateX(-100%);
+  }
+
+  .fos-sidebar.open {
+    transform: translateX(0);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .fos-sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--overlay);
+    z-index: 150;
+  }
+
+  .fos-sidebar-backdrop.show {
+    display: block;
+  }
+
+  .fos-main {
+    margin-left: 0;
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .fos-topbar__menu {
+    display: none !important;
+  }
+
+  .fos-bottom-nav {
+    display: flex;
+  }
+
+  html.fos-keyboard-open .fos-bottom-nav {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+
+  html.fos-keyboard-open [data-app='admin'] .fos-bottom-nav,
+  html.fos-keyboard-open [data-app='production'][data-role='delivery'] .fos-bottom-nav {
+    display: flex !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+
+  html.fos-keyboard-open .fos-main {
+    padding-bottom: 0 !important;
+  }
+
+  html.fos-keyboard-open [data-app='admin'] .fos-main,
+  html.fos-keyboard-open [data-app='production'][data-role='delivery'] .fos-main {
+    padding-bottom: calc(var(--bottom-nav-h) + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .fos-content {
+    padding: 16px;
+  }
+
+  [data-app='admin'] {
+    --bottom-nav-h: 56px;
+  }
+
+  [data-app='admin'] .fos-topbar {
+    height: 48px;
+    background: #fff;
+    border-bottom-color: #ececea;
+  }
+
+  [data-app='admin'] .fos-topbar__title {
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  [data-app='admin'] .fos-content {
+    background: #f5f6f8;
+    padding: 12px;
+  }
+
+  [data-app='admin'] .fos-bottom-nav,
+  [data-app='order'] .fos-bottom-nav,
+  [data-app='production'][data-role='delivery'] .fos-bottom-nav {
+    background: #fff;
+    border-top: none;
+    box-shadow: 0 -2px 12px rgba(15, 15, 15, 0.06);
+    height: var(--bottom-nav-h);
+    padding-top: 2px;
+    z-index: 450;
+    transform: translateZ(0);
+    -webkit-transform: translateZ(0);
+  }
+
+  [data-app='admin'] .fos-bottom-nav {
+    overflow-x: hidden;
+    flex-wrap: nowrap;
+    justify-content: space-around;
+  }
+
+  [data-app='admin'] .fos-bottom-nav__item {
+    flex: 1;
+    min-width: 0;
+    max-width: none;
+    gap: 1px;
+    padding: 2px 4px 4px;
+  }
+
+  [data-app='order'] .fos-bottom-nav__item {
+    gap: 1px;
+    padding: 2px 1px 4px;
+  }
+
+  [data-app='production'][data-role='delivery'] .fos-bottom-nav__item {
+    flex: 1;
+    min-width: 0;
+  }
+
+  [data-app='admin'] .fos-bottom-nav__label,
+  [data-app='order'] .fos-bottom-nav__label {
+    font-size: 10px;
+  }
+
+  [data-app='admin'] .fos-bottom-nav__item .fos-nav-icon,
+  [data-app='order'] .fos-bottom-nav__item .fos-nav-icon,
+  [data-app='production'][data-role='delivery'] .fos-bottom-nav__item .fos-nav-icon {
+    color: #b5b4b1;
+  }
+
+  [data-app='admin'] .fos-bottom-nav__item.active .fos-nav-icon,
+  [data-app='order'] .fos-bottom-nav__item.active .fos-nav-icon,
+  [data-app='production'][data-role='delivery'] .fos-bottom-nav__item.active .fos-nav-icon {
+    color: #9b9a97;
+  }
+
+  [data-app='admin'] .fos-bottom-nav__item .fos-nav-icon svg,
+  [data-app='order'] .fos-bottom-nav__item .fos-nav-icon svg,
+  [data-app='production'][data-role='delivery'] .fos-bottom-nav__item .fos-nav-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* Login */
+.fos-login {
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.fos-login__hero {
+  background: linear-gradient(145deg, var(--accent) 0%, var(--accent-hover) 100%);
+  color: #fff;
+  padding: 48px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.fos-login__hero h1 {
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 800;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+
+.fos-login__hero p {
+  font-size: 15px;
+  opacity: 0.9;
+  max-width: 360px;
+}
+
+.fos-login__shop-name {
+  margin-top: 24px;
+  font-size: 18px;
+  font-weight: 700;
+  opacity: 0.95;
+  letter-spacing: 0.02em;
+}
+
+.fos-login__form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fos-login__form .field {
+  display: block;
+  margin-bottom: 0;
+}
+
+.fos-login__submit {
+  margin-top: 0;
+}
+
+.fos-login__footer {
+  margin-top: 20px;
+  display: flex;
+  justify-content: center;
+}
+
+.fos-lang-btn {
+  min-width: 72px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.fos-login__form-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--bg);
+}
+
+.fos-login__card {
+  width: 100%;
+  max-width: 380px;
+}
+
+.fos-login__card h2 {
+  font-size: 22px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.fos-login__card .hint {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 767px) {
+  .fos-login {
+    grid-template-columns: 1fr;
+  }
+
+  .fos-login__hero {
+    padding: 32px 24px;
+    min-height: auto;
+  }
+
+  .fos-login__hero h1 {
+    font-size: 24px;
+  }
+}
