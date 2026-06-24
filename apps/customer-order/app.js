@@ -954,17 +954,12 @@
   }
 
   function renderShopSuccess(result) {
-    const settlement = FOS.payment.resolveShopSettlement(shopSession);
-    const settleHint = settlement === FOS.payment.SETTLEMENT.CASH
-      ? FOS.i18n.t('都度払いとして受付しました', '已按现结店铺受理')
-      : FOS.i18n.t('月払いとして受付しました', '已按月结店铺受理');
     renderShell(`
       <div class="customer-order__success">
         <div class="customer-order__success-icon">✓</div>
         <h1>${FOS.i18n.t('ご注文ありがとうございます', '下单成功')}</h1>
         <p>${FOS.i18n.t('注文番号', '订单号')} #${FOS.fmt.escapeHtml(String(result.order_no || ''))}</p>
         <p class="customer-order__total">${FOS.i18n.t('合計', '合计')}：${FOS.fmt.money(result.total)}</p>
-        <p class="field__hint">${settleHint}</p>
         <div class="customer-order__success-actions">
           <button type="button" class="btn btn--primary btn--block" id="shopContinueBtn">${FOS.i18n.t('買い物を続ける', '继续购物')}</button>
         </div>

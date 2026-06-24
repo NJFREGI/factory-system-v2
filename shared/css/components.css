@@ -2772,6 +2772,20 @@ html.fos-scroll-lock body {
   background: var(--bg-elevated);
   overflow: hidden;
 }
+.settings-panel--link {
+  width: 100%;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  padding: 0;
+  cursor: pointer;
+}
+.settings-panel--link .settings-panel__head {
+  border: 0;
+}
 .settings-panel__head {
   display: flex;
   align-items: center;
