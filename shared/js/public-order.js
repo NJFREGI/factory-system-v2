@@ -151,10 +151,26 @@ FOS.publicOrder = {
     };
   },
 
+  resolvePublicH5Base(loc = window.location) {
+    if (FOS.appUrls?.publicBase) {
+      const fromAppUrls = FOS.appUrls.publicBase(loc);
+      if (fromAppUrls) return fromAppUrls;
+    }
+    const cfg = String(FOS.CONFIG?.PUBLIC_APP_BASE_URL || '').trim().replace(/\/+$/, '');
+    if (cfg && !/localhost|127\.0\.0\.1/i.test(cfg)) return cfg;
+    const origin = String(loc?.origin || '');
+    if (origin && !/localhost|127\.0\.0\.1/i.test(origin)) {
+      const path = loc.pathname || '';
+      const idx = path.indexOf('/apps/');
+      const root = idx >= 0 ? path.slice(0, idx) : '';
+      return `${origin}${root}`.replace(/\/+$/, '');
+    }
+    return cfg;
+  },
+
   buildOrderUrl({ merchantId, channelId, mode, settlement, shopId } = {}) {
-    const base = FOS.appUrls?.publicBase?.() || '';
+    const base = FOS.publicOrder.resolvePublicH5Base();
     if (!base) {
-      FOS.appUrls?.requirePublicBase?.();
       throw new Error('public_h5_base_url_missing');
     }
     const url = new URL(`${base}/apps/customer-order/`);
@@ -237,9 +253,8 @@ FOS.publicOrder = {
 
   buildLookupUrl(loc = window.location) {
     const parsed = FOS.publicOrder.parseFromLocation(loc);
-    const base = FOS.appUrls?.publicBase?.(loc) || '';
+    const base = FOS.publicOrder.resolvePublicH5Base(loc);
     if (!base) {
-      FOS.appUrls?.requirePublicBase?.();
       throw new Error('public_h5_base_url_missing');
     }
     const url = new URL(`${base}/apps/customer-order/`);
@@ -311,6 +326,18 @@ FOS.publicOrder = {
     return data;
   },
 
+  async loginShopChannel({ merchantId, loginId, password } = {}) {
+    const { data, error } = await FOS.db.sb.rpc('shop_channel_login', {
+      p_payload: {
+        merchant_id: merchantId,
+        login_id: loginId,
+        password,
+      },
+    });
+    if (error) throw error;
+    return data;
+  },
+
   shopSessionKey(merchantId, channelId) {
     return `co_shop_session_${merchantId}_${channelId}`;
   },
@@ -375,6 +402,7 @@ FOS.publicOrder = {
       phone_and_code_required: FOS.i18n.t('電話番号と注文番号を入力してください', '请输入手机号和订单号'),
       shop_login_required: FOS.i18n.t('店舗IDとパスワードを入力してください', '请输入店铺账号和密码'),
       shop_login_invalid: FOS.i18n.t('店舗IDまたはパスワードが違います', '店铺账号或密码错误'),
+      shop_settlement_mismatch: FOS.i18n.t('このQRは月払い店舗専用です', '此二维码仅限月结店铺登录'),
       phone_password_required: FOS.i18n.t('電話番号とパスワードを入力してください', '请输入手机号和密码'),
       password_too_short: FOS.i18n.t('パスワードは4文字以上', '密码至少 4 位'),
       phone_already_registered: FOS.i18n.t('この電話番号は登録済みです', '该手机号已注册，请直接登录'),

@@ -270,4 +270,48 @@ $$;
 GRANT EXECUTE ON FUNCTION create_public_order(JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION create_shop_channel_order(JSONB) TO anon, authenticated;
 
+-- 店铺渠道扫码登录（H5 匿名端无法直接查 users 表时使用）
+CREATE OR REPLACE FUNCTION shop_channel_login(p_payload JSONB)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_merchant TEXT := trim(coalesce(p_payload->>'merchant_id', ''));
+  v_login    TEXT := trim(coalesce(p_payload->>'login_id', ''));
+  v_phone    TEXT := regexp_replace(v_login, '\s', '', 'g');
+  v_pass     TEXT := trim(coalesce(p_payload->>'password', ''));
+  v_row      users%ROWTYPE;
+BEGIN
+  IF v_merchant = '' OR v_login = '' OR v_pass = '' THEN
+    RAISE EXCEPTION 'shop_login_required';
+  END IF;
+
+  SELECT * INTO v_row FROM users
+  WHERE merchant_id = v_merchant
+    AND role = 'order'
+    AND active = TRUE
+    AND password_hash = v_pass
+    AND (id = v_login OR phone = v_phone)
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'shop_login_invalid';
+  END IF;
+
+  RETURN jsonb_build_object(
+    'id', v_row.id,
+    'name', v_row.name,
+    'phone', coalesce(v_row.phone, ''),
+    'address', coalesce(v_row.address, ''),
+    'contact_name', coalesce(v_row.contact_name, ''),
+    'settlement_type', coalesce(v_row.settlement_type, 'monthly'),
+    'merchant_id', v_row.merchant_id
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION shop_channel_login(JSONB) TO anon, authenticated;
+
 NOTIFY pgrst, 'reload schema';

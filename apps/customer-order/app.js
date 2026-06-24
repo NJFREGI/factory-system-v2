@@ -171,12 +171,20 @@
   }
 
   function renderError(msg) {
+    let lookupHref = '#';
+    try {
+      lookupHref = FOS.publicOrder.buildLookupUrl();
+    } catch {
+      const base = FOS.publicOrder.resolvePublicH5Base?.()
+        || String(FOS.CONFIG?.PUBLIC_APP_BASE_URL || '').replace(/\/+$/, '');
+      if (base) lookupHref = `${base}/apps/customer-order/?view=lookup`;
+    }
     document.getElementById('app').innerHTML = `
       <div class="customer-order customer-order--center">
         <div class="customer-order__error">
           <div style="font-size:40px">⚠️</div>
           <p>${FOS.fmt.escapeHtml(msg)}</p>
-          <a class="btn btn--primary" href="${FOS.publicOrder.buildLookupUrl()}">${FOS.i18n.t('注文照会', '订单查询')}</a>
+          <a class="btn btn--primary" href="${FOS.fmt.escapeHtml(lookupHref)}">${FOS.i18n.t('注文照会', '订单查询')}</a>
         </div>
       </div>`;
   }
@@ -302,12 +310,19 @@
     }
   }
 
+  function customerDisplayLabel(session) {
+    const name = String(session?.name || '').trim();
+    if (name) return `${name} 様`;
+    const phone = String(session?.phone || '').trim();
+    return phone || '—';
+  }
+
   function renderShopLogin({ settlement = 'monthly', forced = false, shopId = '' } = {}) {
     const hint = FOS.i18n.t('月払い店舗アカウントでログインしてください', '请使用月结店铺账号登录');
     const title = FOS.i18n.t('月払いログイン', '月结登录');
     const prefillShop = shopId || urlParams?.shopId || '';
     renderShell(`
-      <div class="customer-order__shop-login">
+      <div class="customer-order__shop-login customer-auth-form">
         <h2>${title}</h2>
         <p class="field__hint">${hint}</p>
         <label class="field"><span class="field__label">${FOS.i18n.t('店舗ID / 電話番号', '店铺账号 / 手机号')}</span>
@@ -340,6 +355,22 @@
     return byPhone;
   }
 
+  async function loginShopAccount(login, pass) {
+    try {
+      return await FOS.publicOrder.loginShopChannel({
+        merchantId: ctx.merchant.id,
+        loginId: login,
+        password: pass,
+      });
+    } catch (e) {
+      const msg = String(e?.message || e?.code || '');
+      if (/shop_channel_login|PGRST202|42883/i.test(msg)) {
+        return findShopUser(login, pass);
+      }
+      throw e;
+    }
+  }
+
   async function submitShopLogin(expectedSettlement) {
     const id = document.getElementById('shopLoginId')?.value?.trim();
     const pass = document.getElementById('shopLoginPass')?.value?.trim();
@@ -349,7 +380,7 @@
     }
     FOS.ui.showLoading();
     try {
-      const data = await findShopUser(id, pass);
+      const data = await loginShopAccount(id, pass);
       if (!data) {
         FOS.ui.toast(FOS.i18n.t('店舗IDまたはパスワードが違います', '店铺账号或密码错误'), 'error');
         return;
@@ -364,6 +395,8 @@
       orderMode = 'shop';
       cart = FOS.storage.get(CART_KEY()) || [];
       renderShop();
+    } catch (e) {
+      FOS.ui.toast(FOS.publicOrder.mapRpcError(e), 'error');
     } finally {
       FOS.ui.hideLoading();
     }
@@ -374,7 +407,7 @@
       if (shopView === 'orders') {
         return `
           <div class="customer-order__mode-bar">
-            <span>📱 ${FOS.fmt.escapeHtml(customerSession.phone)}</span>
+            <span>${FOS.fmt.escapeHtml(customerDisplayLabel(customerSession))}</span>
             <div class="customer-order__mode-actions">
               <button type="button" class="btn btn--ghost btn--sm" id="customerShopBtn">${FOS.i18n.t('買い物に戻る', '继续购物')}</button>
               <button type="button" class="btn btn--ghost btn--sm" id="customerLogoutBtn">${FOS.i18n.t('ログアウト', '退出')}</button>
@@ -383,7 +416,7 @@
       }
       return `
         <div class="customer-order__mode-bar">
-          <span>📱 ${FOS.fmt.escapeHtml(customerSession.phone)}</span>
+          <span>${FOS.fmt.escapeHtml(customerDisplayLabel(customerSession))}</span>
           <div class="customer-order__mode-actions">
             <button type="button" class="btn btn--ghost btn--sm" id="customerOrdersBtn">${FOS.i18n.t('注文履歴', '我的订单')}</button>
             <button type="button" class="btn btn--ghost btn--sm" id="customerLogoutBtn">${FOS.i18n.t('ログアウト', '退出')}</button>
@@ -464,21 +497,35 @@
     FOS.storage.set(CART_KEY(), cart);
   }
 
-  function paintCatTabs() {
+  function scrollActiveCatTab(smooth = true) {
+    const el = document.getElementById('catTabs');
+    const active = el?.querySelector('.cat-tab--active');
+    if (!el || !active) return;
+    const targetLeft = active.offsetLeft - (el.clientWidth - active.offsetWidth) / 2;
+    el.scrollTo({
+      left: Math.max(0, targetLeft),
+      behavior: smooth ? 'smooth' : 'auto',
+    });
+  }
+
+  function paintCatTabs(scrollCenter = false) {
     const el = document.getElementById('catTabs');
     if (!el) return;
     const cats = FOS.categories.get(allProducts);
     el.innerHTML = [
-      `<button type="button" class="cat-tab${catFilter === '' ? ' active' : ''}" data-cat="">${FOS.i18n.t('全て', '全部')}</button>`,
-      ...cats.map((c) => `<button type="button" class="cat-tab${catFilter === c ? ' active' : ''}" data-cat="${FOS.fmt.escapeHtml(c)}">${FOS.fmt.escapeHtml(c)}</button>`),
+      `<button type="button" class="cat-tab ${catFilter === '' ? 'cat-tab--active' : ''}" data-cat="">${FOS.i18n.t('全て', '全部')}</button>`,
+      ...cats.map((c) => `<button type="button" class="cat-tab ${catFilter === c ? 'cat-tab--active' : ''}" data-cat="${FOS.fmt.escapeHtml(c)}">${FOS.fmt.escapeHtml(c)}</button>`),
     ].join('');
     el.querySelectorAll('[data-cat]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        catFilter = btn.dataset.cat;
-        paintCatTabs();
+        catFilter = btn.dataset.cat || '';
+        paintCatTabs(true);
         paintProducts();
       });
     });
+    if (scrollCenter) {
+      requestAnimationFrame(() => scrollActiveCatTab(true));
+    }
   }
 
   function filteredProducts() {
@@ -644,12 +691,6 @@
   }
 
   function checkoutBodyHtml(profile, totals) {
-    const payOpts = FOS.publicOrder.PAYMENT_METHODS.map((m) => `
-      <label class="public-pay-opt">
-        <input type="radio" name="payMethod" value="${m.id}" ${m.id === 'cash' ? 'checked' : ''}>
-        <span>${FOS.i18n.t(m.labelJa, m.labelZh)}</span>
-      </label>`).join('');
-
     return `
       <div id="checkoutCartLines"></div>
       <div class="totals-row"><span>${FOS.i18n.t('合計（税込）', '合计（含税）')}</span><strong id="checkoutTotal">${FOS.fmt.money(totals.total)}</strong></div>
@@ -674,14 +715,8 @@
           <select class="field__input" id="delSlot">
             ${FOS.publicOrder.DELIVERY_SLOTS.map((s) => `<option value="${s.id}" ${deliverySlot === s.id ? 'selected' : ''}>${FOS.i18n.t(s.labelJa, s.labelZh)}</option>`).join('')}
           </select></label>
-        <label class="field"><span class="field__label">${FOS.i18n.t('配送時間の補足', '配送时间补充')}</span>
-          <input class="field__input" id="delTimeNote" placeholder="${FOS.i18n.t('例：15時以降でお願いします', '例：下午3点以后可以')}"></label>
         <label class="field"><span class="field__label">${FOS.i18n.t('備考', '备注')}</span>
           <textarea class="field__input" id="custNote" rows="2"></textarea></label>
-        <fieldset class="field">
-          <span class="field__label">${FOS.i18n.t('お支払方法', '支付方式')} *</span>
-          <div class="public-pay-grid">${payOpts}</div>
-        </fieldset>
         <button type="button" class="btn btn--primary btn--block btn--lg" id="submitPublicOrderBtn">${FOS.i18n.t('注文を送信', '提交订单')}</button>
       </div>`;
   }
@@ -732,16 +767,10 @@
     const phone = document.getElementById('custPhone')?.value?.trim();
     const address = document.getElementById('custAddress')?.value?.trim();
     const note = document.getElementById('custNote')?.value?.trim();
-    const delTimeNote = document.getElementById('delTimeNote')?.value?.trim();
-    const payEl = document.querySelector('input[name="payMethod"]:checked');
-    const payMethod = payEl?.value;
+    const payMethod = 'cash';
 
     if (!name || !phone || !address) {
       FOS.ui.toast(FOS.i18n.t('氏名・電話・住所を入力してください', '请填写姓名、电话和地址'), 'error');
-      return;
-    }
-    if (!payMethod) {
-      FOS.ui.toast(FOS.i18n.t('支払方法を選択してください', '请选择支付方式'), 'error');
       return;
     }
     if (deliveryDateMode === 'custom' && !deliveryCustomDate) {
@@ -757,7 +786,7 @@
       note: note || null,
       delivery_preferred_date: resolvedDeliveryDate(),
       delivery_preferred_slot: deliverySlot,
-      delivery_time_note: delTimeNote || null,
+      delivery_time_note: null,
       customer_payment_method: payMethod,
       items: cart.map((item) => ({ product_id: item.product_id, qty: item.qty })),
     };

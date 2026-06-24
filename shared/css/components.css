@@ -5131,6 +5131,28 @@ html.fos-drag-active .product-hub__sidebar-scroll {
 .customer-order__shop-login {
   max-width: 400px;
   margin: 24px auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.customer-order__shop-login h2 {
+  margin: 0;
+  font-size: 20px;
+  text-align: center;
+}
+.customer-order__shop-login .field {
+  margin: 0;
+}
+.customer-order__shop-login .field__hint {
+  margin: 0;
+  text-align: center;
+}
+.customer-order-app .cat-tabs-sticky {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding: 0 0 4px;
 }
 .customer-auth-panel__hint {
   margin: 0 0 14px;
