@@ -8,15 +8,20 @@ FOS.shopQr = {
   HINT_KEY: 'login_merchant_hint',
 
   appBaseUrl() {
+    const fromConfig = FOS.config?.publicAppBaseUrl?.();
+    if (fromConfig) return fromConfig;
     const base = FOS.appUrls?.publicBase?.();
     if (base) return base;
     if (!FOS.appUrls?.isLocalOrigin?.(location.origin)) {
       const path = location.pathname || '';
       const idx = path.indexOf('/apps/');
       const root = idx >= 0 ? path.slice(0, idx) : '';
-      return `${location.origin}${root}`;
+      return `${location.origin}${root}`.replace(/\/+$/, '');
     }
-    return FOS.appUrls?.normalizeBase?.(FOS.CONFIG.PUBLIC_APP_BASE_URL || '') || '';
+    const cfg = FOS.CONFIG || window.FOS_CONFIG || {};
+    return FOS.appUrls?.normalizeBase?.(
+      cfg.PUBLIC_APP_BASE_URL || cfg.public_h5_base_url || '',
+    ) || '';
   },
 
   buildOrderLoginUrl({ shopId, merchantId } = {}) {

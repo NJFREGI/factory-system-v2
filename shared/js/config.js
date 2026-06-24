@@ -47,3 +47,37 @@ FOS.CONFIG = {
    */
   PUBLIC_APP_BASE_URL: 'https://shop.njfregi.jp',
 };
+
+/** @deprecated 旧字段名，与 PUBLIC_APP_BASE_URL 同值 */
+Object.defineProperty(FOS.CONFIG, 'public_h5_base_url', {
+  get() { return FOS.CONFIG.PUBLIC_APP_BASE_URL; },
+  set(v) {
+    FOS.CONFIG.PUBLIC_APP_BASE_URL = String(v || '').trim().replace(/\/+$/, '');
+  },
+  enumerable: true,
+  configurable: true,
+});
+
+/** 全局别名，兼容旧脚本 */
+window.FOS_CONFIG = FOS.CONFIG;
+
+/**
+ * 读取顾客端公网基址（统一入口，兼容 public_h5_base_url / PUBLIC_APP_BASE_URL）
+ */
+FOS.config = {
+  publicAppBaseUrl(loc = typeof location !== 'undefined' ? location : null) {
+    const cfg = FOS.CONFIG || window.FOS_CONFIG || {};
+    const fromCfg = String(cfg.PUBLIC_APP_BASE_URL || cfg.public_h5_base_url || '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (fromCfg && !/localhost|127\.0\.0\.1/i.test(fromCfg)) return fromCfg;
+    const origin = String(loc?.origin || '');
+    if (origin && !/localhost|127\.0\.0\.1/i.test(origin)) {
+      const path = loc.pathname || '';
+      const idx = path.indexOf('/apps/');
+      const root = idx >= 0 ? path.slice(0, idx) : '';
+      return `${origin}${root}`.replace(/\/+$/, '');
+    }
+    return fromCfg;
+  },
+};

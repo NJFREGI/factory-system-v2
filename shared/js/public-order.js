@@ -152,26 +152,24 @@ FOS.publicOrder = {
   },
 
   resolvePublicH5Base(loc = window.location) {
+    const fromConfig = FOS.config?.publicAppBaseUrl?.(loc);
+    if (fromConfig) return fromConfig;
     if (FOS.appUrls?.publicBase) {
       const fromAppUrls = FOS.appUrls.publicBase(loc);
       if (fromAppUrls) return fromAppUrls;
     }
-    const cfg = String(FOS.CONFIG?.PUBLIC_APP_BASE_URL || '').trim().replace(/\/+$/, '');
-    if (cfg && !/localhost|127\.0\.0\.1/i.test(cfg)) return cfg;
-    const origin = String(loc?.origin || '');
-    if (origin && !/localhost|127\.0\.0\.1/i.test(origin)) {
-      const path = loc.pathname || '';
-      const idx = path.indexOf('/apps/');
-      const root = idx >= 0 ? path.slice(0, idx) : '';
-      return `${origin}${root}`.replace(/\/+$/, '');
-    }
-    return cfg;
+    const cfg = FOS.CONFIG || window.FOS_CONFIG || {};
+    const legacy = String(cfg.PUBLIC_APP_BASE_URL || cfg.public_h5_base_url || '')
+      .trim()
+      .replace(/\/+$/, '');
+    if (legacy && !/localhost|127\.0\.0\.1/i.test(legacy)) return legacy;
+    return '';
   },
 
   buildOrderUrl({ merchantId, channelId, mode, settlement, shopId } = {}) {
     const base = FOS.publicOrder.resolvePublicH5Base();
     if (!base) {
-      throw new Error('public_h5_base_url_missing');
+      throw new Error('PUBLIC_APP_BASE_URL_missing');
     }
     const url = new URL(`${base}/apps/customer-order/`);
     if (merchantId) url.searchParams.set('merchant', merchantId);
@@ -255,7 +253,7 @@ FOS.publicOrder = {
     const parsed = FOS.publicOrder.parseFromLocation(loc);
     const base = FOS.publicOrder.resolvePublicH5Base(loc);
     if (!base) {
-      throw new Error('public_h5_base_url_missing');
+      throw new Error('PUBLIC_APP_BASE_URL_missing');
     }
     const url = new URL(`${base}/apps/customer-order/`);
     url.searchParams.set('view', 'lookup');

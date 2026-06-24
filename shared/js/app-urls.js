@@ -37,7 +37,13 @@ FOS.appUrls = {
   },
 
   configBase() {
-    return FOS.appUrls.normalizeBase(FOS.CONFIG.PUBLIC_APP_BASE_URL || '');
+    const raw = FOS.config?.publicAppBaseUrl?.()
+      || FOS.CONFIG?.PUBLIC_APP_BASE_URL
+      || FOS.CONFIG?.public_h5_base_url
+      || window.FOS_CONFIG?.PUBLIC_APP_BASE_URL
+      || window.FOS_CONFIG?.public_h5_base_url
+      || '';
+    return FOS.appUrls.normalizeBase(raw);
   },
 
   normalizeBase(url) {
@@ -69,7 +75,7 @@ FOS.appUrls = {
   },
 
   requirePublicBase() {
-    const base = FOS.appUrls.publicBase();
+    const base = FOS.config?.publicAppBaseUrl?.() || FOS.appUrls.publicBase();
     if (base) return base;
     const msg = FOS.i18n.t(
       '顧客注文URLが未設定です。管理者に連絡してください。',

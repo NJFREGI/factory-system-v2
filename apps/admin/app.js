@@ -3425,7 +3425,7 @@
     const ch = channels.find((c) => String(c.id) === String(channelId));
     if (!ch) return;
     await FOS.appUrls.loadPublicBase();
-    if (!FOS.appUrls.publicBase()) {
+    if (!FOS.config?.publicAppBaseUrl?.() && !FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
     }
@@ -3462,7 +3462,7 @@
     const shop = shops.find((s) => String(s.id) === String(shopId));
     if (!shop) return;
     await FOS.appUrls.loadPublicBase();
-    if (!FOS.appUrls.publicBase()) {
+    if (!FOS.config?.publicAppBaseUrl?.() && !FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
     }
@@ -3669,7 +3669,7 @@
     const shop = shops.find((s) => String(s.id) === String(shopId));
     if (!shop) return;
     await FOS.appUrls.loadPublicBase();
-    if (!FOS.appUrls.publicBase()) {
+    if (!FOS.config?.publicAppBaseUrl?.() && !FOS.appUrls.publicBase()) {
       FOS.appUrls.requirePublicBase();
       return;
     }

@@ -175,8 +175,9 @@
     try {
       lookupHref = FOS.publicOrder.buildLookupUrl();
     } catch {
-      const base = FOS.publicOrder.resolvePublicH5Base?.()
-        || String(FOS.CONFIG?.PUBLIC_APP_BASE_URL || '').replace(/\/+$/, '');
+      const base = FOS.config?.publicAppBaseUrl?.()
+        || FOS.publicOrder.resolvePublicH5Base?.()
+        || String(FOS.CONFIG?.PUBLIC_APP_BASE_URL || FOS.CONFIG?.public_h5_base_url || '').replace(/\/+$/, '');
       if (base) lookupHref = `${base}/apps/customer-order/?view=lookup`;
     }
     document.getElementById('app').innerHTML = `
