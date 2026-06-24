@@ -257,6 +257,7 @@ FOS.ui = {
     FOS.ui.ensureModal();
     const modal = document.getElementById('fosModal');
     const panel = modal.querySelector('.fos-modal__panel');
+    const head = modal.querySelector('.fos-modal__head');
     document.getElementById('fosModalTitle').textContent = title || '';
     document.getElementById('fosModalBody').innerHTML = bodyHtml || '';
     panel.classList.toggle('fos-modal__panel--lg', size === 'lg');
@@ -264,6 +265,7 @@ FOS.ui = {
     panel.classList.toggle('fos-modal__panel--sheet', size === 'sheet');
     modal.classList.toggle('fos-modal--full', size === 'full');
     modal.classList.toggle('fos-modal--sheet', size === 'sheet');
+    if (head) head.hidden = size === 'full' && !title;
     modal.hidden = false;
     document.body.style.overflow = 'hidden';
     return modal;
@@ -280,6 +282,8 @@ FOS.ui = {
     if (panel) {
       panel.classList.remove('fos-modal__panel--lg', 'fos-modal__panel--full', 'fos-modal__panel--sheet');
     }
+    const head = modal.querySelector('.fos-modal__head');
+    if (head) head.hidden = false;
     document.body.style.overflow = '';
     document.getElementById('fosModalBody').innerHTML = '';
     document.querySelector('.product-editor__head-actions')?.remove();

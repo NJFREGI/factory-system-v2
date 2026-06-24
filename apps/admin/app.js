@@ -3395,14 +3395,15 @@
       </div>
     `;
 
-    const subPageShell = (title, innerHtml) => `
+    const subPageShell = (title, innerHtml, footHtml = '') => `
       <div class="settings-subpage">
         <div class="settings-subpage__head">
           <button type="button" class="btn btn--ghost btn--sm" id="settingsSubBack">← ${FOS.i18n.t('戻る', '返回')}</button>
           <div class="settings-subpage__title">${FOS.fmt.escapeHtml(title)}</div>
           <span></span>
         </div>
-        <div class="settings-subpage__body">${innerHtml}</div>
+        <div class="settings-subpage__scroll">${innerHtml}</div>
+        ${footHtml ? `<div class="settings-subpage__foot">${footHtml}</div>` : ''}
       </div>`;
 
     const openSettingsPanelPage = async (panelId) => {
@@ -3491,12 +3492,14 @@
         FOS.ui.openModal({
           title: '',
           size: 'full',
-          bodyHtml: subPageShell(FOS.i18n.t('プリンター設定', '打印机设置'), `
+          bodyHtml: subPageShell(
+            FOS.i18n.t('プリンター設定', '打印机设置'),
+            `
+            <label class="settings-printer-enable-card settings-check">
+              <input type="checkbox" id="printerEnabled" ${ps.enabled ? 'checked' : ''}>
+              <span class="settings-printer-enable-card__label">${FOS.i18n.t('出庫印刷を有効化', '启用出库打印')}</span>
+            </label>
             <div class="settings-printer-card">
-              <label class="settings-check">
-                <input type="checkbox" id="printerEnabled" ${ps.enabled ? 'checked' : ''}>
-                <span>${FOS.i18n.t('出庫印刷を有効化', '启用出库打印')}</span>
-              </label>
               <div class="settings-printer-types">
                 <div class="field__label">${FOS.i18n.t('プリンター種別', '打印机类型')}</div>
                 <label class="settings-radio"><input type="radio" name="printerType" value="lan" ${ps.type === 'lan' ? 'checked' : ''}> ${FOS.i18n.t('ネットワーク', '网络打印机')}</label>
@@ -3521,8 +3524,9 @@
                   <option value="3" ${ps.copies === 3 ? 'selected' : ''}>3</option>
                 </select>
               </label>
-            </div>
-            <button type="button" class="btn btn--primary btn--block btn--lg settings-subpage__save" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`),
+            </div>`,
+            `<button type="button" class="btn btn--primary btn--block btn--lg" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`
+          ),
         });
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         document.getElementById('savePrinterSettingsBtn')?.addEventListener('click', async () => {
