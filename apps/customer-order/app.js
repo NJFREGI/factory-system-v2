@@ -613,9 +613,67 @@
         </div>`;
     }).join('');
     grid.querySelectorAll('[data-pid]:not([data-soldout])').forEach((el) => {
-      el.addEventListener('click', () => addToCart(el.dataset.pid));
+      el.addEventListener('click', () => addToCart(el.dataset.pid, el));
     });
     updateFab();
+  }
+
+  function getCartFlyTarget() {
+    return document.getElementById('cartFab');
+  }
+
+  function pulseCartTarget() {
+    const fab = document.getElementById('cartFab');
+    if (!fab) return;
+    fab.classList.remove('cart-fab--pulse');
+    void fab.offsetWidth;
+    fab.classList.add('cart-fab--pulse');
+    setTimeout(() => fab.classList.remove('cart-fab--pulse'), 400);
+  }
+
+  function flyToCart(tileEl, p) {
+    const media = tileEl?.querySelector('.product-tile__media');
+    const target = getCartFlyTarget();
+    if (!media || !target) return;
+    const from = media.getBoundingClientRect();
+    const to = target.getBoundingClientRect();
+    const startSize = Math.min(from.width, from.height, 112);
+    const endScale = 0.16;
+    const fly = document.createElement('div');
+    fly.className = 'cart-fly';
+    const imgSrc = media.querySelector('.product-tile__img')?.src || p.image_url || '';
+    if (imgSrc) {
+      const imgEl = document.createElement('img');
+      imgEl.src = imgSrc;
+      imgEl.alt = '';
+      fly.appendChild(imgEl);
+    } else {
+      const emoji = document.createElement('span');
+      emoji.className = 'cart-fly__emoji';
+      emoji.textContent = p.emoji || '📦';
+      fly.appendChild(emoji);
+    }
+    const startX = from.left + from.width / 2 - startSize / 2;
+    const startY = from.top + from.height / 2 - startSize / 2;
+    const endX = to.left + to.width / 2;
+    const endY = to.top + to.height / 2;
+    fly.style.width = `${startSize}px`;
+    fly.style.height = `${startSize}px`;
+    fly.style.left = `${startX}px`;
+    fly.style.top = `${startY}px`;
+    document.body.appendChild(fly);
+    const dx = endX - (startX + startSize / 2);
+    const dy = endY - (startY + startSize / 2);
+    const anim = fly.animate([
+      { transform: 'translate(0, 0) scale(1) rotate(0deg)', opacity: 1 },
+      { transform: `translate(${dx * 0.42}px, ${dy * 0.22}px) scale(0.72) rotate(200deg)`, opacity: 0.95, offset: 0.38 },
+      { transform: `translate(${dx * 0.78}px, ${dy * 0.62}px) scale(0.42) rotate(420deg)`, opacity: 0.75, offset: 0.72 },
+      { transform: `translate(${dx}px, ${dy}px) scale(${endScale}) rotate(720deg)`, opacity: 0 },
+    ], { duration: 920, easing: 'cubic-bezier(0.18, 0.72, 0.12, 1)', fill: 'forwards' });
+    anim.onfinish = () => {
+      fly.remove();
+      pulseCartTarget();
+    };
   }
 
   function updateFab() {
@@ -639,7 +697,7 @@
     return Number(p.price) || 0;
   }
 
-  function addToCart(pid) {
+  function addToCart(pid, tileEl) {
     const p = allProducts.find((x) => String(x.id) === String(pid));
     if (!p || p.stock <= 0) return;
     const c = [...cart];
@@ -661,8 +719,12 @@
         qty: 1,
       });
     }
+    if (tileEl) flyToCart(tileEl, p);
     setCart(c);
     paintProducts();
+    const qtyEl = document.querySelector(`.product-tile[data-pid="${pid}"] .product-tile__qty`);
+    qtyEl?.classList.add('product-tile__qty--pop');
+    setTimeout(() => qtyEl?.classList.remove('product-tile__qty--pop'), 400);
   }
 
   function changeQty(pid, delta) {
