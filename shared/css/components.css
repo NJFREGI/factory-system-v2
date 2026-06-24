@@ -2806,12 +2806,61 @@ html.fos-scroll-lock body {
   border-radius: var(--radius-lg);
   padding: 16px;
 }
+.settings-subpage__save {
+  margin-top: 18px;
+}
 .settings-notice-card {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 14px;
   margin-bottom: 14px;
+}
+.settings-printer-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+  margin-bottom: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 17px;
+  font-weight: 600;
+  min-height: 48px;
+}
+.settings-check input {
+  width: 22px;
+  height: 22px;
+}
+.settings-printer-types {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-radio {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  min-height: 44px;
+}
+.settings-radio input {
+  width: 20px;
+  height: 20px;
+}
+.settings-radio--disabled {
+  opacity: 0.55;
+}
+.admin-order-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 .danger-confirm {
   background: var(--bg-elevated);
@@ -2838,6 +2887,28 @@ html.fos-scroll-lock body {
 }
 .danger-confirm__actions .btn {
   min-height: 48px;
+}
+.inline-danger-confirm {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  padding: 10px;
+}
+.inline-danger-confirm__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.inline-danger-confirm__msg {
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.inline-danger-confirm__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 .settings-panel__head {
   display: flex;

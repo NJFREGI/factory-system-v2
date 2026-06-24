@@ -283,7 +283,10 @@
       const items = (order.order_items || []).map((i, itemIdx) => FOS.orders.orderLineItemHtml(i, itemIdx)).join('');
       let actions = '';
       if (order.status === 'pending') actions = `<button class="btn btn--primary btn--sm" data-act="preparing" data-id="${order.id}">→ ${FOS.i18n.t('準備中', '准备')}</button>`;
-      if (order.status === 'preparing') actions = `<button class="btn btn--success btn--sm" data-act="shipped" data-id="${order.id}">→ ${FOS.i18n.t('出荷', '发货')}</button>`;
+      if (order.status === 'preparing') actions = `<button class="btn btn--success btn--sm" data-outbound="${order.id}">📤 ${FOS.i18n.t('出庫', '出库')}</button>`;
+      if (['shipped', 'delivered', 'confirmed'].includes(order.status)) {
+        actions += `<button class="btn btn--secondary btn--sm" data-reprint="${order.id}">🖨 ${FOS.i18n.t('再印刷', '补打')}</button>`;
+      }
 
       const shopSettlement = FOS.payment.resolveShopSettlement(shopMap[order.shop_id] || {});
       const isCashShop = !isPublicOrder(order) && shopSettlement === FOS.payment.SETTLEMENT.CASH;
@@ -319,9 +322,44 @@
     el.querySelectorAll('[data-act]').forEach((btn) => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        await FOS.orders.updateStatus(btn.dataset.id, btn.dataset.act);
-        FOS.ui.toast(FOS.i18n.t('更新しました', '已更新'), 'success');
-        await renderFactoryOrders();
+        FOS.ui.showLoading();
+        try {
+          await FOS.orders.updateStatus(btn.dataset.id, btn.dataset.act);
+          FOS.ui.toast(FOS.i18n.t('更新しました', '已更新'), 'success');
+          await renderFactoryOrders();
+        } catch (err) {
+          FOS.ui.toast(err.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
+      });
+    });
+    el.querySelectorAll('[data-outbound]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        FOS.ui.showLoading();
+        try {
+          const result = await FOS.outboundPrint.shipAndPrint(btn.dataset.outbound);
+          FOS.ui.toast(result.message, result.printFailed ? 'error' : 'success');
+          await renderFactoryOrders();
+        } catch (err) {
+          FOS.ui.toast(err.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
+      });
+    });
+    el.querySelectorAll('[data-reprint]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        FOS.ui.showLoading();
+        try {
+          await FOS.outboundPrint.reprint(btn.dataset.reprint);
+        } catch (err) {
+          FOS.ui.toast(err.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
       });
     });
     el.querySelectorAll('[data-edit-order]').forEach((btn) => {

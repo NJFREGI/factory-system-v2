@@ -813,9 +813,64 @@
       return `<button class="btn btn--primary btn--sm" data-st="${order.id}" data-v="preparing">→ ${FOS.i18n.t('準備中', '准备')}</button>`;
     }
     if (order.status === 'preparing') {
-      return `<button class="btn btn--success btn--sm" data-st="${order.id}" data-v="shipped">→ ${FOS.i18n.t('出荷完了', '发货完成')}</button>`;
+      return `<button class="btn btn--success btn--sm" data-outbound="${order.id}">📤 ${FOS.i18n.t('出庫', '出库')}</button>`;
     }
     return '';
+  }
+
+  function orderPrintActionsHtml(order) {
+    if (!['shipped', 'delivered', 'confirmed'].includes(order.status)) return '';
+    return `<button type="button" class="btn btn--secondary btn--sm" data-reprint="${order.id}">🖨 ${FOS.i18n.t('配送単再印刷', '补打配送单')}</button>`;
+  }
+
+  async function handleOutboundOrder(orderId) {
+    FOS.ui.showLoading();
+    try {
+      const result = await FOS.outboundPrint.shipAndPrint(orderId);
+      FOS.ui.toast(result.message, result.printFailed ? 'error' : 'success');
+      if (adminDetailOrderId) await renderAdminOrderDetailPage();
+      else await renderOrdersPage();
+    } catch (e) {
+      FOS.ui.toast(e.message, 'error');
+    } finally {
+      FOS.ui.hideLoading();
+    }
+  }
+
+  function bindOrderDetailActions(root) {
+    root?.querySelectorAll('[data-st]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        FOS.ui.showLoading();
+        try {
+          await FOS.orders.updateStatus(btn.dataset.st, btn.dataset.v);
+          FOS.ui.toast(FOS.i18n.t('更新しました', '已更新'), 'success');
+          if (adminDetailOrderId) await renderAdminOrderDetailPage();
+          else await renderOrdersPage();
+        } catch (e) {
+          FOS.ui.toast(e.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
+      });
+    });
+    root?.querySelectorAll('[data-outbound]').forEach((btn) => {
+      btn.addEventListener('click', () => handleOutboundOrder(btn.dataset.outbound));
+    });
+    root?.querySelectorAll('[data-reprint]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        FOS.ui.showLoading();
+        try {
+          await FOS.outboundPrint.reprint(btn.dataset.reprint);
+        } catch (e) {
+          FOS.ui.toast(e.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
+      });
+    });
+    root?.querySelectorAll('[data-edit-order]').forEach((btn) => {
+      btn.addEventListener('click', () => openOrderEdit(btn.dataset.editOrder));
+    });
   }
 
   async function openOrderEdit(orderId) {
@@ -3016,20 +3071,12 @@
         <div class="admin-order-actions admin-order-detail__actions">
           ${orderEditBtnHtml(order.id)}
           ${orderStatusActionsHtml(order)}
+          ${orderPrintActionsHtml(order)}
         </div>
       </div>`;
 
     document.getElementById('adminOrderDetailBack')?.addEventListener('click', closeAdminOrderDetail);
-    main.querySelectorAll('[data-st]').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        await FOS.orders.updateStatus(btn.dataset.st, btn.dataset.v);
-        FOS.ui.toast(FOS.i18n.t('更新しました', '已更新'), 'success');
-        await renderAdminOrderDetailPage();
-      });
-    });
-    main.querySelectorAll('[data-edit-order]').forEach((btn) => {
-      btn.addEventListener('click', () => openOrderEdit(btn.dataset.editOrder));
-    });
+    bindOrderDetailActions(main);
   }
 
   function paintPaymentsBody() {
@@ -3065,10 +3112,12 @@
       </div>`).join('');
     el.querySelectorAll('[data-del-pm]').forEach((btn) => {
       btn.addEventListener('click', async () => {
+        const row = btn.closest('.payment-method-row');
         const ok = await confirmDangerAction({
           title: FOS.i18n.t('確認削除', '确认删除'),
           message: FOS.i18n.t('确定删除该结账方式吗？', '确定删除该结账方式吗？'),
           confirmLabel: FOS.i18n.t('削除', '删除'),
+          inlineHost: row,
         });
         if (!ok) return;
         try {
@@ -3082,7 +3131,30 @@
     });
   }
 
-  function confirmDangerAction({ title, message, confirmLabel } = {}) {
+  function confirmDangerAction({ title, message, confirmLabel, inlineHost } = {}) {
+    if (inlineHost) {
+      return new Promise((resolve) => {
+        document.querySelectorAll('.inline-danger-confirm').forEach((el) => el.remove());
+        const box = document.createElement('div');
+        box.className = 'inline-danger-confirm';
+        box.innerHTML = `
+          <div class="inline-danger-confirm__title">${FOS.fmt.escapeHtml(title || FOS.i18n.t('確認削除', '确认删除'))}</div>
+          <div class="inline-danger-confirm__msg">${FOS.fmt.escapeHtml(message || FOS.i18n.t('确定执行此操作吗？', '确定执行此操作吗？'))}</div>
+          <div class="inline-danger-confirm__actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-cancel>${FOS.i18n.t('キャンセル', '取消')}</button>
+            <button type="button" class="btn btn--del btn--sm" data-ok>${FOS.fmt.escapeHtml(confirmLabel || FOS.i18n.t('削除', '删除'))}</button>
+          </div>`;
+        inlineHost.insertAdjacentElement('afterend', box);
+        box.querySelector('[data-cancel]')?.addEventListener('click', () => {
+          box.remove();
+          resolve(false);
+        });
+        box.querySelector('[data-ok]')?.addEventListener('click', () => {
+          box.remove();
+          resolve(true);
+        });
+      });
+    }
     return new Promise((resolve) => {
       const id = `confirmDanger_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       FOS.ui.openModal({
@@ -3234,6 +3306,7 @@
     FOS.shell.setPageTitle(FOS.i18n.t('設定', '设置'));
     await FOS.cutoff.load();
     await FOS.orderSettings.load();
+    await FOS.printerSettings.load();
     await FOS.appUrls.loadPublicBase();
     const invoiceProfile = await FOS.invoiceSettings.load();
     await loadShops();
@@ -3317,6 +3390,7 @@
               <button type="button" class="btn btn--primary btn--sm" id="openAddShopBtn">＋ ${FOS.i18n.t('店舗追加', '添加店铺')}</button>
             </div>
             <div id="shopList" class="settings-list"></div>`, { asLink: true })}
+          ${settingsPanelHtml('printer', '🖨', FOS.i18n.t('プリンター設定', '打印机设置'), '', { asLink: true })}
         </div>
       </div>
     `;
@@ -3367,7 +3441,7 @@
               <span class="field__label">${FOS.i18n.t('毎日の締め切り', '每日截单')}</span>
               <input type="time" class="field__input" id="cutoffSetting" value="${FOS.cutoff.time}">
             </label>
-            <button type="button" class="btn btn--primary btn--block btn--lg" id="saveCutoffBtn">${FOS.i18n.t('保存', '保存')}</button>`),
+            <button type="button" class="btn btn--primary btn--block btn--lg settings-subpage__save" id="saveCutoffBtn">${FOS.i18n.t('保存', '保存')}</button>`),
         });
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         document.getElementById('saveCutoffBtn')?.addEventListener('click', async () => {
@@ -3403,6 +3477,63 @@
           FOS.ui.showLoading();
           try {
             await FOS.orderSettings.saveNotice(notice);
+            FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
+        return;
+      }
+      if (panelId === 'printer') {
+        const ps = FOS.printerSettings._cache || FOS.printerSettings.defaults();
+        FOS.ui.openModal({
+          title: '',
+          size: 'full',
+          bodyHtml: subPageShell(FOS.i18n.t('プリンター設定', '打印机设置'), `
+            <div class="settings-printer-card">
+              <label class="settings-check">
+                <input type="checkbox" id="printerEnabled" ${ps.enabled ? 'checked' : ''}>
+                <span>${FOS.i18n.t('出庫印刷を有効化', '启用出库打印')}</span>
+              </label>
+              <div class="settings-printer-types">
+                <div class="field__label">${FOS.i18n.t('プリンター種別', '打印机类型')}</div>
+                <label class="settings-radio"><input type="radio" name="printerType" value="lan" ${ps.type === 'lan' ? 'checked' : ''}> ${FOS.i18n.t('ネットワーク', '网络打印机')}</label>
+                <label class="settings-radio settings-radio--disabled"><input type="radio" name="printerType" value="usb" disabled> ${FOS.i18n.t('USB', 'USB打印机')} <span class="field__hint">${FOS.i18n.t('準備中', '即将支持')}</span></label>
+                <label class="settings-radio settings-radio--disabled"><input type="radio" name="printerType" value="bluetooth" disabled> ${FOS.i18n.t('Bluetooth', '蓝牙打印机')} <span class="field__hint">${FOS.i18n.t('準備中', '即将支持')}</span></label>
+              </div>
+              <div class="form-grid form-grid--2" id="printerLanFields">
+                <label class="field">
+                  <span class="field__label">IP</span>
+                  <input class="field__input" id="printerIp" value="${FOS.fmt.escapeHtml(ps.ip)}" placeholder="192.168.1.100">
+                </label>
+                <label class="field">
+                  <span class="field__label">${FOS.i18n.t('ポート', '端口')}</span>
+                  <input class="field__input" id="printerPort" type="number" min="1" max="65535" value="${ps.port || 9100}">
+                </label>
+              </div>
+              <label class="field">
+                <span class="field__label">${FOS.i18n.t('印刷部数', '打印份数')}</span>
+                <select class="field__input" id="printerCopies">
+                  <option value="1" ${ps.copies === 1 ? 'selected' : ''}>1</option>
+                  <option value="2" ${ps.copies === 2 ? 'selected' : ''}>2</option>
+                  <option value="3" ${ps.copies === 3 ? 'selected' : ''}>3</option>
+                </select>
+              </label>
+            </div>
+            <button type="button" class="btn btn--primary btn--block btn--lg settings-subpage__save" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`),
+        });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('savePrinterSettingsBtn')?.addEventListener('click', async () => {
+          const enabled = !!document.getElementById('printerEnabled')?.checked;
+          const type = document.querySelector('input[name="printerType"]:checked')?.value || 'lan';
+          const ip = document.getElementById('printerIp')?.value;
+          const port = document.getElementById('printerPort')?.value;
+          const copies = document.getElementById('printerCopies')?.value;
+          FOS.ui.showLoading();
+          try {
+            await FOS.printerSettings.save({ enabled, type, ip, port, copies });
             FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
           } catch (e) {
             FOS.ui.toast(e.message, 'error');
@@ -3571,7 +3702,11 @@
     el.querySelectorAll('[data-channel-del]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteChannel(btn.dataset.channelDel, btn.dataset.channelName || btn.dataset.channelDel);
+        deleteChannel(
+          btn.dataset.channelDel,
+          btn.dataset.channelName || btn.dataset.channelDel,
+          btn.closest('.settings-list-item__body'),
+        );
       });
     });
   }
@@ -3646,12 +3781,13 @@
     paintChannelList();
   }
 
-  async function deleteChannel(channelId, name) {
+  async function deleteChannel(channelId, name, inlineHost = null) {
     const label = name || channelId;
     const ok = await confirmDangerAction({
       title: FOS.i18n.t('確認削除', '确认删除'),
       message: FOS.i18n.t(`确定删除「${label}」吗？`, `确定删除「${label}」吗？`),
       confirmLabel: FOS.i18n.t('削除', '删除'),
+      inlineHost,
     });
     if (!ok) return;
     const { error } = await FOS.merchants.scopeFilter(
@@ -3930,7 +4066,7 @@
     el.querySelectorAll('[data-shop-del]').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        deleteShop(btn.dataset.shopDel, btn.dataset.shopName);
+        deleteShop(btn.dataset.shopDel, btn.dataset.shopName, btn.closest('.settings-list-item__body'));
       });
     });
   }
@@ -4008,13 +4144,20 @@
     await renderSettings();
   }
 
-  async function deleteShop(id, name) {
-    if (!FOS.ui.confirm(FOS.i18n.t(`「${name}」を削除しますか？`, `确定删除「${name}」？`))) return;
+  async function deleteShop(id, name, inlineHost = null) {
+    const ok = await confirmDangerAction({
+      title: FOS.i18n.t('確認削除', '确认删除'),
+      message: FOS.i18n.t(`确定删除「${name}」吗？`, `确定删除「${name}」吗？`),
+      confirmLabel: FOS.i18n.t('削除', '删除'),
+      inlineHost,
+    });
+    if (!ok) return;
     await FOS.merchants.scopeFilter(
       FOS.db.sb.from('users').update({ active: false }).eq('id', id)
     );
     FOS.ui.toast(FOS.i18n.t('削除しました', '已删除'), 'success');
-    await renderSettings();
+    await loadShops();
+    paintShopList();
   }
 
   async function addShop() {
