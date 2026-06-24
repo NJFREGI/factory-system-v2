@@ -474,11 +474,9 @@
         </div>`;
     }
     if (orderMode === 'shop' && shopSession) {
-      const settlement = FOS.payment.resolveShopSettlement(shopSession);
-      const settleLabel = FOS.payment.settlementLabel(settlement);
       return `
         <div class="customer-order__mode-bar">
-          <span>🏪 ${FOS.fmt.escapeHtml(shopSession.name)} · ${FOS.fmt.escapeHtml(settleLabel)}</span>
+          <span>🏪 ${FOS.fmt.escapeHtml(shopSession.name)}</span>
           <button type="button" class="btn btn--ghost btn--sm" id="shopLogoutBtn">${FOS.i18n.t('ログアウト', '退出')}</button>
         </div>`;
     }
@@ -772,7 +770,7 @@
     FOS.ui.openModal({
       title: FOS.i18n.t('ご注文内容', '确认订单'),
       size: 'lg',
-      bodyHtml: orderMode === 'shop' ? shopCheckoutBodyHtml(profile, totals) : checkoutBodyHtml(profile, totals),
+      bodyHtml: orderMode === 'shop' ? shopCheckoutBodyHtml(totals) : checkoutBodyHtml(profile, totals),
     });
     setTimeout(() => {
       bindCheckoutForm(profile);
@@ -780,22 +778,11 @@
     }, 0);
   }
 
-  function shopCheckoutBodyHtml(profile, totals) {
-    const settlement = FOS.payment.resolveShopSettlement(shopSession);
-    const settleHint = settlement === FOS.payment.SETTLEMENT.CASH
-      ? FOS.i18n.t('都度払い店舗として注文します', '以现结店铺身份下单')
-      : FOS.i18n.t('月払い店舗として注文します', '以月结店铺身份下单');
+  function shopCheckoutBodyHtml(totals) {
     return `
       <div id="checkoutCartLines"></div>
       <div class="totals-row"><span>${FOS.i18n.t('合計（税込）', '合计（含税）')}</span><strong id="checkoutTotal">${FOS.fmt.money(totals.total)}</strong></div>
       <div class="public-checkout-form">
-        <div class="alert alert--info">${settleHint}</div>
-        <label class="field"><span class="field__label">${FOS.i18n.t('店舗名', '店铺名称')}</span>
-          <input class="field__input" readonly value="${FOS.fmt.escapeHtml(profile.name || '')}"></label>
-        <label class="field"><span class="field__label">${FOS.i18n.t('電話番号', '电话')}</span>
-          <input class="field__input" readonly value="${FOS.fmt.escapeHtml(profile.phone || '')}"></label>
-        <label class="field"><span class="field__label">${FOS.i18n.t('住所', '地址')}</span>
-          <textarea class="field__input" rows="2" readonly>${FOS.fmt.escapeHtml(profile.address || '')}</textarea></label>
         <label class="field"><span class="field__label">${FOS.i18n.t('備考', '备注')}</span>
           <textarea class="field__input" id="custNote" rows="2"></textarea></label>
         <button type="button" class="btn btn--primary btn--block btn--lg" id="submitPublicOrderBtn">${FOS.i18n.t('注文を送信', '提交订单')}</button>
