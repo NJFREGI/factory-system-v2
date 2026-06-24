@@ -30,6 +30,7 @@
   let paymentTab = 'detail';
   let summaryHubTab = 'daily';
   let adminDetailOrderId = null;
+  let adminDetailOrderIds = null;
   let adminDetailReturn = null;
   let unbindProductReorder = null;
   let unbindCatReorder = null;
@@ -285,6 +286,7 @@
   function navigateView(id) {
     FOS.ui.showBottomNav();
     adminDetailOrderId = null;
+    adminDetailOrderIds = null;
     adminDetailReturn = null;
     if (id === 'public-stats') {
       summaryHubTab = 'public';
@@ -1050,7 +1052,11 @@
     el.innerHTML = `<div class="hub-order-list">${shopHtml}${publicSection}</div>`;
     el.querySelectorAll('[data-open-order]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        openAdminOrderDetail(btn.dataset.openOrder, { view: 'orders' });
+        const orderIds = (btn.dataset.openOrders || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+        openAdminOrderDetail(btn.dataset.openOrder, { view: 'orders' }, orderIds.length ? orderIds : null);
       });
     });
   }
@@ -2879,8 +2885,11 @@
     const created = order.created_at ? formatOrderDateTime(order.created_at) : order.order_date || '';
     const mergedCount = Number(order._mergedCount || 1);
     const noSuffix = mergedCount > 1 ? ` (+${mergedCount - 1})` : '';
+    const openOrdersAttr = Array.isArray(order._mergedOrderIds) && order._mergedOrderIds.length > 1
+      ? ` data-open-orders="${order._mergedOrderIds.map((id) => String(id)).join(',')}"`
+      : '';
     return `
-      <button type="button" class="hub-order-card" data-open-order="${order.id}">
+      <button type="button" class="hub-order-card" data-open-order="${order.id}"${openOrdersAttr}>
         <div class="hub-order-card__top">
           <span class="hub-order-card__no">${FOS.i18n.t('注文番号', '订单号')}：#${order.order_no}${noSuffix}</span>
           <span class="badge badge--${st.color} hub-order-card__status">${st.label}</span>
@@ -2901,13 +2910,18 @@
   function bindHubOrderCards(root) {
     root?.querySelectorAll('[data-open-order]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        openAdminOrderDetail(btn.dataset.openOrder, { view: 'summary', hubTab: summaryHubTab });
+        const orderIds = (btn.dataset.openOrders || '')
+          .split(',')
+          .map((x) => x.trim())
+          .filter(Boolean);
+        openAdminOrderDetail(btn.dataset.openOrder, { view: 'summary', hubTab: summaryHubTab }, orderIds.length ? orderIds : null);
       });
     });
   }
 
-  function openAdminOrderDetail(orderId, returnCtx) {
+  function openAdminOrderDetail(orderId, returnCtx, orderIds = null) {
     adminDetailOrderId = orderId;
+    adminDetailOrderIds = Array.isArray(orderIds) && orderIds.length ? orderIds.slice() : null;
     adminDetailReturn = returnCtx || { view: 'orders' };
     renderAdminOrderDetailPage();
   }
@@ -2915,6 +2929,7 @@
   function closeAdminOrderDetail() {
     const ctx = adminDetailReturn;
     adminDetailOrderId = null;
+    adminDetailOrderIds = null;
     adminDetailReturn = null;
     if (ctx?.view === 'summary') {
       summaryHubTab = ctx.hubTab || 'payments';
@@ -2929,6 +2944,13 @@
     FOS.shell.setPageTitle(FOS.i18n.t('注文詳細', '订单详情'));
     FOS.ui.showLoading();
     const order = await FOS.orders.fetchOne(adminDetailOrderId);
+    let mergedOrders = [];
+    if (Array.isArray(adminDetailOrderIds) && adminDetailOrderIds.length > 1) {
+      const ids = adminDetailOrderIds.slice(0, 20);
+      const rows = await Promise.all(ids.map(async (id) => FOS.orders.fetchOne(id)));
+      mergedOrders = rows.filter(Boolean)
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    }
     FOS.ui.hideLoading();
     if (!order) {
       FOS.ui.toast(FOS.i18n.t('注文が見つかりません', '未找到订单'), 'error');
@@ -2949,6 +2971,23 @@
         <div class="admin-order-detail__row"><span>${FOS.i18n.t('住所', '地址')}</span><strong>${FOS.fmt.escapeHtml(order.customer_address || '—')}</strong></div>
         <div class="admin-order-detail__row"><span>${FOS.i18n.t('配達希望', '配送希望')}</span><strong>${FOS.fmt.escapeHtml(FOS.publicOrder.formatDeliveryWish(order) || '—')}</strong></div>
       </div>` : '';
+
+    const mergedBlock = mergedOrders.length > 1
+      ? `<div class="admin-order-section__label">${FOS.i18n.t('同店注文明細', '同店订单明细')}</div>
+        <div class="hub-order-list">${mergedOrders.filter((mo) => mo.id !== order.id).map((mo) => {
+          const createdAt = mo.created_at ? formatOrderDateTime(mo.created_at) : mo.order_date || '';
+          const moItems = (mo.order_items || []).map((i, idx) => FOS.orders.orderLineItemHtml(i, idx)).join('');
+          return `<div class="hub-order-card hub-order-card--static">
+            <div class="hub-order-card__top">
+              <span class="hub-order-card__no">${FOS.i18n.t('注文番号', '订单号')}：#${FOS.fmt.escapeHtml(String(mo.order_no || ''))}</span>
+              <span class="badge badge--${FOS.fmt.status(mo.status).color} hub-order-card__status">${FOS.fmt.status(mo.status).label}</span>
+            </div>
+            <div class="hub-order-card__meta">${createdAt ? `<div>${FOS.i18n.t('注文日時', '下单时间')}：${FOS.fmt.escapeHtml(createdAt)}</div>` : ''}</div>
+            <ul class="order-line-items">${moItems || `<li class="order-line-item">${FOS.i18n.t('商品なし', '暂无商品')}</li>`}</ul>
+            <div class="hub-order-card__foot"><span class="hub-order-card__amount">${FOS.fmt.money(mo.total)}</span></div>
+          </div>`;
+        }).join('')}</div>`
+      : '';
 
     const main = document.getElementById('appMain');
     main.innerHTML = `
@@ -2973,6 +3012,7 @@
         ${order.note ? `<div class="admin-order-detail__note">${FOS.fmt.escapeHtml(order.note)}</div>` : ''}
         <div class="admin-order-section__label">${FOS.i18n.t('商品一覧', '商品列表')}</div>
         <ul class="order-line-items">${items || `<li class="order-line-item">${FOS.i18n.t('商品なし', '暂无商品')}</li>`}</ul>
+        ${mergedBlock}
         <div class="admin-order-actions admin-order-detail__actions">
           ${orderEditBtnHtml(order.id)}
           ${orderStatusActionsHtml(order)}
@@ -3025,7 +3065,12 @@
       </div>`).join('');
     el.querySelectorAll('[data-del-pm]').forEach((btn) => {
       btn.addEventListener('click', async () => {
-        if (!FOS.ui.confirm(FOS.i18n.t('削除しますか？', '确定删除？'))) return;
+        const ok = await confirmDangerAction({
+          title: FOS.i18n.t('確認削除', '确认删除'),
+          message: FOS.i18n.t('确定删除该结账方式吗？', '确定删除该结账方式吗？'),
+          confirmLabel: FOS.i18n.t('削除', '删除'),
+        });
+        if (!ok) return;
         try {
           await FOS.payment.deleteMethod(btn.dataset.delPm);
           FOS.ui.toast(FOS.i18n.t('削除しました', '已删除'), 'success');
@@ -3033,6 +3078,34 @@
         } catch (e) {
           FOS.ui.toast(e.message, 'error');
         }
+      });
+    });
+  }
+
+  function confirmDangerAction({ title, message, confirmLabel } = {}) {
+    return new Promise((resolve) => {
+      const id = `confirmDanger_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      FOS.ui.openModal({
+        title: '',
+        size: 'sm',
+        bodyHtml: `
+          <div class="danger-confirm" id="${id}">
+            <div class="danger-confirm__title">${FOS.fmt.escapeHtml(title || FOS.i18n.t('確認削除', '确认删除'))}</div>
+            <div class="danger-confirm__msg">${FOS.fmt.escapeHtml(message || FOS.i18n.t('确定执行此操作吗？', '确定执行此操作吗？'))}</div>
+            <div class="danger-confirm__actions">
+              <button type="button" class="btn btn--ghost btn--lg" data-cancel>${FOS.i18n.t('キャンセル', '取消')}</button>
+              <button type="button" class="btn btn--del btn--lg" data-ok>${FOS.fmt.escapeHtml(confirmLabel || FOS.i18n.t('削除', '删除'))}</button>
+            </div>
+          </div>`,
+      });
+      const wrap = document.getElementById(id);
+      wrap?.querySelector('[data-cancel]')?.addEventListener('click', () => {
+        FOS.ui.closeModal();
+        resolve(false);
+      });
+      wrap?.querySelector('[data-ok]')?.addEventListener('click', () => {
+        FOS.ui.closeModal();
+        resolve(true);
       });
     });
   }
@@ -3183,14 +3256,14 @@
             <div class="payment-method-add">
               <input class="field__input" id="newPaymentMethodName" placeholder="${FOS.i18n.t('例：現金、振込', '例：现金、转账')}">
               <button type="button" class="btn btn--primary btn--sm" id="addPaymentMethodBtn">＋ ${FOS.i18n.t('追加', '添加')}</button>
-            </div>`)}
+            </div>`, { asLink: true })}
           ${settingsPanelHtml('cutoff', '⏰', FOS.i18n.t('締め切り時間', '截单时间'), `
             <label class="field">
               <span class="field__label">${FOS.i18n.t('毎日の締め切り', '每日截单')}</span>
               <input type="time" class="field__input" id="cutoffSetting" value="${FOS.cutoff.time}">
             </label>
-            <button type="button" class="btn btn--primary btn--sm" id="saveCutoffBtn">${FOS.i18n.t('保存', '保存')}</button>`)}
-          ${settingsPanelHtml('display', '📱', FOS.i18n.t('接单端表示', '接单端显示'), `
+            <button type="button" class="btn btn--primary btn--sm" id="saveCutoffBtn">${FOS.i18n.t('保存', '保存')}</button>`, { asLink: true })}
+          ${settingsPanelHtml('display', '📱', FOS.i18n.t('通知栏', '通知栏'), `
             <label class="field">
               <span class="field__label">${FOS.i18n.t('商家名称', '商家名称')}</span>
               <input type="text" class="field__input" id="orderDisplayName" value="${FOS.fmt.escapeHtml(FOS.orderSettings.displayName)}" placeholder="${FOS.i18n.t('接单端顶部显示', '接单端顶部显示')}">
@@ -3199,7 +3272,7 @@
               <span class="field__label">${FOS.i18n.t('通知栏', '通知栏')}</span>
               <textarea class="field__input" id="orderNotice" rows="2" placeholder="${FOS.i18n.t('例：本日は15時まで受付', '例：今天15点前可下单')}">${FOS.fmt.escapeHtml(FOS.orderSettings.notice)}</textarea>
             </label>
-            <button type="button" class="btn btn--primary btn--sm" id="saveOrderDisplayBtn">${FOS.i18n.t('保存', '保存')}</button>`)}
+            <button type="button" class="btn btn--primary btn--sm" id="saveOrderDisplayBtn">${FOS.i18n.t('保存', '保存')}</button>`, { asLink: true })}
           ${settingsPanelHtml('invoice', '📄', FOS.i18n.t('請求書設定', '账单设置'), `
             <div class="form-grid form-grid--2">
               <label class="field">
@@ -3248,12 +3321,102 @@
       </div>
     `;
 
+    const subPageShell = (title, innerHtml) => `
+      <div class="settings-subpage">
+        <div class="settings-subpage__head">
+          <button type="button" class="btn btn--ghost btn--sm" id="settingsSubBack">← ${FOS.i18n.t('戻る', '返回')}</button>
+          <div class="settings-subpage__title">${FOS.fmt.escapeHtml(title)}</div>
+          <span></span>
+        </div>
+        <div class="settings-subpage__body">${innerHtml}</div>
+      </div>`;
+
     const openSettingsPanelPage = async (panelId) => {
+      if (panelId === 'payment') {
+        FOS.ui.openModal({
+          title: '',
+          size: 'full',
+          bodyHtml: subPageShell(FOS.i18n.t('都度払い方法', '现结结账方式'), `
+            <div id="paymentMethodsList"></div>
+            <div class="payment-method-add">
+              <input class="field__input" id="newPaymentMethodName" placeholder="${FOS.i18n.t('例：現金、振込', '例：现金、转账')}">
+              <button type="button" class="btn btn--primary btn--sm" id="addPaymentMethodBtn">＋ ${FOS.i18n.t('追加', '添加')}</button>
+            </div>`),
+        });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        await paintPaymentMethodsList();
+        document.getElementById('addPaymentMethodBtn')?.addEventListener('click', async () => {
+          const name = document.getElementById('newPaymentMethodName')?.value;
+          try {
+            await FOS.payment.addMethod(name);
+            document.getElementById('newPaymentMethodName').value = '';
+            FOS.ui.toast(FOS.i18n.t('追加しました', '已添加'), 'success');
+            await paintPaymentMethodsList();
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          }
+        });
+        return;
+      }
+      if (panelId === 'cutoff') {
+        FOS.ui.openModal({
+          title: '',
+          size: 'full',
+          bodyHtml: subPageShell(FOS.i18n.t('締め切り時間', '截单时间'), `
+            <label class="field">
+              <span class="field__label">${FOS.i18n.t('毎日の締め切り', '每日截单')}</span>
+              <input type="time" class="field__input" id="cutoffSetting" value="${FOS.cutoff.time}">
+            </label>
+            <button type="button" class="btn btn--primary btn--block btn--lg" id="saveCutoffBtn">${FOS.i18n.t('保存', '保存')}</button>`),
+        });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('saveCutoffBtn')?.addEventListener('click', async () => {
+          const v = document.getElementById('cutoffSetting')?.value;
+          FOS.ui.showLoading();
+          try {
+            await FOS.cutoff.save(v);
+            FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
+        return;
+      }
+      if (panelId === 'display') {
+        FOS.ui.openModal({
+          title: '',
+          size: 'full',
+          bodyHtml: subPageShell(FOS.i18n.t('通知栏', '通知栏'), `
+            <div class="settings-notice-card">
+              <label class="field">
+                <span class="field__label">${FOS.i18n.t('通知内容', '通知内容')}</span>
+                <textarea class="field__input" id="orderNotice" rows="5" placeholder="${FOS.i18n.t('例：本日は15時まで受付', '例：今天15点前可下单')}">${FOS.fmt.escapeHtml(FOS.orderSettings.notice)}</textarea>
+              </label>
+            </div>
+            <button type="button" class="btn btn--primary btn--block btn--lg" id="saveOrderDisplayBtn">${FOS.i18n.t('保存', '保存')}</button>`),
+        });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('saveOrderDisplayBtn')?.addEventListener('click', async () => {
+          const notice = document.getElementById('orderNotice')?.value;
+          FOS.ui.showLoading();
+          try {
+            await FOS.orderSettings.saveNotice(notice);
+            FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
+        return;
+      }
       if (panelId === 'invoice') {
         FOS.ui.openModal({
-          title: FOS.i18n.t('請求書設定', '账单设置'),
+          title: '',
           size: 'full',
-          bodyHtml: `
+          bodyHtml: subPageShell(FOS.i18n.t('請求書設定', '账单设置'), `
             <div class="form-grid form-grid--2">
               <label class="field">
                 <span class="field__label">${FOS.i18n.t('会社名', '公司名称')}</span>
@@ -3286,8 +3449,9 @@
               <span class="field__label">${FOS.i18n.t('お振り込み先', '汇款账户')}</span>
               <textarea class="field__input" id="invBankInfo" rows="2" placeholder="${FOS.i18n.t('例：三井住友銀行 上野支店 普通8695450', '例：三井住友银行 上野支行 普通账户')}">${FOS.fmt.escapeHtml(invoiceProfile.bankInfo)}</textarea>
             </label>
-            <button type="button" class="btn btn--primary btn--sm" id="saveInvoiceSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`,
+            <button type="button" class="btn btn--primary btn--block btn--lg" id="saveInvoiceSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`),
         });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         document.getElementById('saveInvoiceSettingsBtn')?.addEventListener('click', async () => {
           FOS.ui.showLoading();
           try {
@@ -3301,8 +3465,6 @@
               bankInfo: document.getElementById('invBankInfo')?.value,
             });
             FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
-            FOS.ui.closeModal();
-            await renderSettings();
           } catch (e) {
             FOS.ui.toast(e.message, 'error');
           } finally {
@@ -3313,14 +3475,15 @@
       }
       if (panelId === 'channels') {
         FOS.ui.openModal({
-          title: FOS.i18n.t('顧客注文チャンネル', '顾客下单渠道'),
+          title: '',
           size: 'full',
-          bodyHtml: `
+          bodyHtml: subPageShell(FOS.i18n.t('顧客注文チャンネル', '顾客下单渠道'), `
             <div class="settings-panel__toolbar">
               <button type="button" class="btn btn--primary btn--sm" id="openAddChannelBtn">＋ ${FOS.i18n.t('チャンネル追加', '添加渠道')}</button>
             </div>
-            <div id="channelList" class="settings-list"></div>`,
+            <div id="channelList" class="settings-list"></div>`),
         });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         await loadChannels();
         paintChannelList();
         document.getElementById('openAddChannelBtn')?.addEventListener('click', openAddChannelModal);
@@ -3328,14 +3491,15 @@
       }
       if (panelId === 'shops') {
         FOS.ui.openModal({
-          title: FOS.i18n.t('店舗管理', '店铺管理'),
+          title: '',
           size: 'full',
-          bodyHtml: `
+          bodyHtml: subPageShell(FOS.i18n.t('店舗管理', '店铺管理'), `
             <div class="settings-panel__toolbar">
               <button type="button" class="btn btn--primary btn--sm" id="openAddShopBtn">＋ ${FOS.i18n.t('店舗追加', '添加店铺')}</button>
             </div>
-            <div id="shopList" class="settings-list"></div>`,
+            <div id="shopList" class="settings-list"></div>`),
         });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         paintShopList();
         document.getElementById('openAddShopBtn')?.addEventListener('click', openAddShopModal);
       }
@@ -3344,68 +3508,6 @@
       btn.addEventListener('click', () => openSettingsPanelPage(btn.dataset.openSettingsPanel));
     });
 
-    paintShopList();
-    await loadChannels();
-    paintChannelList();
-    await paintPaymentMethodsList();
-    document.getElementById('addPaymentMethodBtn')?.addEventListener('click', async () => {
-      const name = document.getElementById('newPaymentMethodName')?.value;
-      try {
-        await FOS.payment.addMethod(name);
-        document.getElementById('newPaymentMethodName').value = '';
-        FOS.ui.toast(FOS.i18n.t('追加しました', '已添加'), 'success');
-        await paintPaymentMethodsList();
-      } catch (e) {
-        FOS.ui.toast(e.message, 'error');
-      }
-    });
-    document.getElementById('saveCutoffBtn')?.addEventListener('click', async () => {
-      const v = document.getElementById('cutoffSetting').value;
-      FOS.ui.showLoading();
-      try {
-        await FOS.cutoff.save(v);
-        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
-      } catch (e) {
-        FOS.ui.toast(e.message, 'error');
-      } finally {
-        FOS.ui.hideLoading();
-      }
-    });
-    document.getElementById('saveOrderDisplayBtn')?.addEventListener('click', async () => {
-      const name = document.getElementById('orderDisplayName')?.value;
-      const notice = document.getElementById('orderNotice')?.value;
-      FOS.ui.showLoading();
-      try {
-        await FOS.orderSettings.saveDisplayName(name);
-        await FOS.orderSettings.saveNotice(notice);
-        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
-      } catch (e) {
-        FOS.ui.toast(e.message, 'error');
-      } finally {
-        FOS.ui.hideLoading();
-      }
-    });
-    document.getElementById('saveInvoiceSettingsBtn')?.addEventListener('click', async () => {
-      FOS.ui.showLoading();
-      try {
-        await FOS.invoiceSettings.save({
-          companyName: document.getElementById('invCompanyName')?.value,
-          zip: document.getElementById('invZip')?.value,
-          address: document.getElementById('invAddress')?.value,
-          tel: document.getElementById('invTel')?.value,
-          fax: document.getElementById('invFax')?.value,
-          registrationNo: document.getElementById('invRegistrationNo')?.value,
-          bankInfo: document.getElementById('invBankInfo')?.value,
-        });
-        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
-      } catch (e) {
-        FOS.ui.toast(e.message, 'error');
-      } finally {
-        FOS.ui.hideLoading();
-      }
-    });
-    document.getElementById('openAddShopBtn')?.addEventListener('click', openAddShopModal);
-    document.getElementById('openAddChannelBtn')?.addEventListener('click', openAddChannelModal);
   }
 
   async function loadChannels() {
@@ -3546,7 +3648,12 @@
 
   async function deleteChannel(channelId, name) {
     const label = name || channelId;
-    if (!FOS.ui.confirm(FOS.i18n.t(`「${label}」を削除しますか？`, `确定删除「${label}」？`))) return;
+    const ok = await confirmDangerAction({
+      title: FOS.i18n.t('確認削除', '确认删除'),
+      message: FOS.i18n.t(`确定删除「${label}」吗？`, `确定删除「${label}」吗？`),
+      confirmLabel: FOS.i18n.t('削除', '删除'),
+    });
+    if (!ok) return;
     const { error } = await FOS.merchants.scopeFilter(
       FOS.db.sb.from('order_channels').delete().eq('id', channelId)
     );
