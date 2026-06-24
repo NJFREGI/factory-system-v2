@@ -29,19 +29,43 @@ FOS.outboundPrint = {
     const port = parseInt(cfg.port, 10) || 9100;
     if (!host) throw new Error(FOS.i18n.t('プリンターIP未設定', '未配置打印机 IP'));
 
+    let result = null;
     if (FOS.native?.lanPrintRaw) {
-      const ok = await FOS.native.lanPrintRaw(host, port, payload.base64);
-      if (!ok) throw new Error(FOS.i18n.t('プリンター接続失敗', '打印机连接失败'));
-      return true;
+      result = await FOS.native.lanPrintRaw(host, port, payload.base64);
+    } else if (window.NjfAndroid?.lanPrintRaw) {
+      const ok = !!window.NjfAndroid.lanPrintRaw(host, port, payload.base64);
+      const detail = String(window.NjfAndroid.getLanPrintLastError?.() || '').trim();
+      result = { ok, error: detail };
     }
 
-    if (window.NjfAndroid?.lanPrintRaw) {
-      const ok = window.NjfAndroid.lanPrintRaw(host, port, payload.base64);
-      if (!ok) throw new Error(FOS.i18n.t('プリンター接続失敗', '打印机连接失败'));
-      return true;
-    }
+    if (result?.ok) return true;
 
+    const detail = String(result?.error || '').trim();
+    if (detail) {
+      throw new Error(`${FOS.i18n.t('プリンター接続失敗', '打印机连接失败')} (${detail})`);
+    }
     throw new Error(FOS.i18n.t('LAN印刷はアプリからご利用ください', '请在管理端 APP 中使用 LAN 打印'));
+  },
+
+  async testPrint(cfg) {
+    const settings = cfg || await FOS.printerSettings.load();
+    const host = String(settings.ip || '').trim();
+    if (!host) throw new Error(FOS.i18n.t('プリンターIP未設定', '未配置打印机 IP'));
+
+    const now = new Date();
+    const stamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const bytes = FOS.escpos.concat(
+      FOS.escpos.init(),
+      FOS.escpos.separator(),
+      FOS.escpos.styledLine(FOS.i18n.t('印刷テスト', '打印测试'), { align: 1, bold: true, size: 0x11 }),
+      FOS.escpos.lineText(host),
+      FOS.escpos.lineText(stamp),
+      FOS.escpos.separator(),
+      FOS.escpos.feed(2),
+      FOS.escpos.cut()
+    );
+    await FOS.outboundPrint.sendLan({ base64: FOS.escpos.bytesToBase64(bytes) }, settings);
+    return true;
   },
 
   async printOrder(order, { printType = 'outbound', copies } = {}) {

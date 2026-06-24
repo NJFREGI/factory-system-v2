@@ -2823,6 +2823,9 @@ html.fos-scroll-lock body {
   padding: 12px 0 calc(12px + env(safe-area-inset-bottom, 0px));
   background: var(--bg-elevated);
   border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 .settings-subpage__body {
   background: var(--bg-elevated);

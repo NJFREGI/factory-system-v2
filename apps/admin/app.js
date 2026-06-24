@@ -3525,10 +3525,28 @@
                 </select>
               </label>
             </div>`,
-            `<button type="button" class="btn btn--primary btn--block btn--lg" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`
+            `<button type="button" class="btn btn--secondary btn--block btn--lg" id="testPrinterSettingsBtn">${FOS.i18n.t('印刷テスト', '测试打印')}</button>
+            <button type="button" class="btn btn--primary btn--block btn--lg" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`
           ),
         });
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('testPrinterSettingsBtn')?.addEventListener('click', async () => {
+          const enabled = !!document.getElementById('printerEnabled')?.checked;
+          const type = document.querySelector('input[name="printerType"]:checked')?.value || 'lan';
+          const ip = document.getElementById('printerIp')?.value;
+          const port = document.getElementById('printerPort')?.value;
+          const copies = document.getElementById('printerCopies')?.value;
+          const draft = FOS.printerSettings.normalize({ enabled, type, ip, port, copies });
+          FOS.ui.showLoading();
+          try {
+            await FOS.outboundPrint.testPrint(draft);
+            FOS.ui.toast(FOS.i18n.t('印刷テスト送信済', '测试打印已发送'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
         document.getElementById('savePrinterSettingsBtn')?.addEventListener('click', async () => {
           const enabled = !!document.getElementById('printerEnabled')?.checked;
           const type = document.querySelector('input[name="printerType"]:checked')?.value || 'lan';
