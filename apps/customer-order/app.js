@@ -100,6 +100,7 @@
       FOS.ui.showLoading();
       ctx = await FOS.publicOrder.getContext(params.channelId);
       allProducts = ctx.products || [];
+      FOS.payment.setCustomerMerchantId(ctx.merchant?.id || params.merchantId);
       if (!entrySettlement) entrySettlement = 'cash';
 
       shopSession = FOS.publicOrder.loadShopSession(ctx.merchant.id, ctx.channel.id);
@@ -322,12 +323,16 @@
     const hint = FOS.i18n.t('月払い店舗アカウントでログインしてください', '请使用月结店铺账号登录');
     const title = FOS.i18n.t('月払いログイン', '月结登录');
     const prefillShop = shopId || urlParams?.shopId || '';
+    const qrHint = prefillShop
+      ? FOS.i18n.t('QRから店舗を読み込みました。パスワードを入力してください', '已从二维码识别店铺，请输入密码')
+      : FOS.i18n.t('管理画面の「ログインID」または店舗IDを入力してください', '请输入管理端显示的「登录账号」');
     renderShell(`
       <div class="customer-order__shop-login customer-auth-form">
         <h2>${title}</h2>
         <p class="field__hint">${hint}</p>
+        ${prefillShop ? `<p class="field__hint">${FOS.fmt.escapeHtml(qrHint)}</p>` : `<p class="field__hint">${qrHint}</p>`}
         <label class="field"><span class="field__label">${FOS.i18n.t('店舗ID / 電話番号', '店铺账号 / 手机号')}</span>
-          <input class="field__input" id="shopLoginId" autocomplete="username" value="${FOS.fmt.escapeHtml(prefillShop)}" placeholder="${FOS.i18n.t('例：shop01 または 09012345678', '例：shop01 或 09012345678')}"></label>
+          <input class="field__input" id="shopLoginId" autocomplete="username" value="${FOS.fmt.escapeHtml(prefillShop)}" placeholder="${FOS.i18n.t('例：26004 または 09012345678', '例：26004 或 09012345678')}"></label>
         <label class="field"><span class="field__label">${FOS.i18n.t('パスワード', '密码')}</span>
           <input class="field__input" id="shopLoginPass" type="password" autocomplete="current-password"></label>
         <button type="button" class="btn btn--primary btn--block" id="shopLoginSubmit">${FOS.i18n.t('ログイン', '登录')}</button>
@@ -337,36 +342,59 @@
     document.getElementById('shopLoginSubmit')?.addEventListener('click', () => submitShopLogin('monthly'));
   }
 
-  async function findShopUser(login, pass) {
+  async function findShopUser(login, pass, shopId = '') {
+    const merchantId = ctx.merchant.id;
     const base = FOS.db.sb.from('users').select('*')
       .eq('password_hash', pass)
       .eq('role', 'order')
       .eq('active', true)
-      .eq('merchant_id', ctx.merchant.id);
+      .eq('merchant_id', merchantId);
+    if (shopId) {
+      const { data: byQr } = await base.eq('id', shopId).maybeSingle();
+      if (byQr) return byQr;
+    }
     const { data: byId } = await base.eq('id', login).maybeSingle();
     if (byId) return byId;
     const phone = login.replace(/\s/g, '');
-    const { data: byPhone } = await FOS.db.sb.from('users').select('*')
+    if (phone) {
+      const { data: byPhone } = await FOS.db.sb.from('users').select('*')
+        .eq('password_hash', pass)
+        .eq('role', 'order')
+        .eq('active', true)
+        .eq('merchant_id', merchantId)
+        .eq('phone', phone)
+        .maybeSingle();
+      if (byPhone) return byPhone;
+    }
+    const { data: byName } = await FOS.db.sb.from('users').select('*')
       .eq('password_hash', pass)
       .eq('role', 'order')
       .eq('active', true)
-      .eq('merchant_id', ctx.merchant.id)
-      .eq('phone', phone)
+      .eq('merchant_id', merchantId)
+      .eq('name', login)
       .maybeSingle();
-    return byPhone;
+    return byName;
   }
 
-  async function loginShopAccount(login, pass) {
+  async function loginShopAccount(login, pass, shopId = '') {
     try {
       return await FOS.publicOrder.loginShopChannel({
         merchantId: ctx.merchant.id,
         loginId: login,
         password: pass,
+        shopId: shopId || urlParams?.shopId || '',
       });
     } catch (e) {
       const msg = String(e?.message || e?.code || '');
-      if (/shop_channel_login|PGRST202|42883/i.test(msg)) {
-        return findShopUser(login, pass);
+      if (/PGRST202|42883|does not exist|schema cache/i.test(msg)) {
+        FOS.ui.toast(FOS.i18n.t(
+          '店舗ログイン機能が未設定です。管理者に schema-channel-shop-order.sql の実行を依頼してください',
+          '店铺登录功能未配置，请联系管理员在 Supabase 执行 schema-channel-shop-order.sql'
+        ), 'error');
+        return null;
+      }
+      if (/shop_channel_login/i.test(msg)) {
+        return findShopUser(login, pass, shopId || urlParams?.shopId || '');
       }
       throw e;
     }
@@ -375,13 +403,14 @@
   async function submitShopLogin(expectedSettlement) {
     const id = document.getElementById('shopLoginId')?.value?.trim();
     const pass = document.getElementById('shopLoginPass')?.value?.trim();
-    if (!id || !pass) {
+    const qrShopId = urlParams?.shopId || '';
+    if ((!id && !qrShopId) || !pass) {
       FOS.ui.toast(FOS.i18n.t('店舗IDとパスワードを入力してください', '请输入店铺账号和密码'), 'error');
       return;
     }
     FOS.ui.showLoading();
     try {
-      const data = await loginShopAccount(id, pass);
+      const data = await loginShopAccount(id, pass, qrShopId);
       if (!data) {
         FOS.ui.toast(FOS.i18n.t('店舗IDまたはパスワードが違います', '店铺账号或密码错误'), 'error');
         return;

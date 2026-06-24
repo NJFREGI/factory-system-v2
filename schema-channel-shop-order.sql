@@ -1,6 +1,11 @@
 -- 统一扫码入口 · 店铺月结下单 RPC + payment_type 字段
 -- 在 Supabase SQL Editor 执行（可重复执行）
 
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS contact_name TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS merchant_id TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS settlement_type TEXT NOT NULL DEFAULT 'monthly';
+
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_type TEXT;
 
 -- 散客单回填 payment_type
@@ -192,11 +197,16 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'channel_not_found'; END IF;
 
   SELECT * INTO v_shop FROM users
-  WHERE id = v_shop_login
-    AND password_hash = v_shop_pass
+  WHERE password_hash = v_shop_pass
     AND role = 'order'
     AND active = TRUE
-    AND merchant_id = v_ch.merchant_id;
+    AND merchant_id = v_ch.merchant_id
+    AND (
+      id = v_shop_login
+      OR phone = regexp_replace(v_shop_login, '\s', '', 'g')
+      OR trim(name) = v_shop_login
+    )
+  LIMIT 1;
   IF NOT FOUND THEN RAISE EXCEPTION 'shop_login_invalid'; END IF;
 
   v_items := coalesce(p_payload->'items', '[]'::jsonb);
@@ -271,6 +281,63 @@ GRANT EXECUTE ON FUNCTION create_public_order(JSONB) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION create_shop_channel_order(JSONB) TO anon, authenticated;
 
 -- 店铺渠道扫码登录（H5 匿名端无法直接查 users 表时使用）
+CREATE OR REPLACE FUNCTION fos_shop_session_json(p_user_id TEXT)
+RETURNS JSONB
+LANGUAGE plpgsql
+STABLE
+SET search_path = public
+AS $$
+DECLARE
+  v_id          TEXT;
+  v_name        TEXT;
+  v_address     TEXT;
+  v_merchant_id TEXT;
+  v_phone       TEXT := '';
+  v_contact     TEXT := '';
+  v_settlement  TEXT := 'monthly';
+BEGIN
+  SELECT u.id, u.name, coalesce(u.address, ''), u.merchant_id
+  INTO v_id, v_name, v_address, v_merchant_id
+  FROM users u
+  WHERE u.id = p_user_id;
+
+  IF v_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'
+  ) THEN
+    SELECT coalesce(u.phone, '') INTO v_phone FROM users u WHERE u.id = p_user_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'contact_name'
+  ) THEN
+    SELECT coalesce(u.contact_name, '') INTO v_contact FROM users u WHERE u.id = p_user_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'settlement_type'
+  ) THEN
+    SELECT coalesce(u.settlement_type, 'monthly') INTO v_settlement FROM users u WHERE u.id = p_user_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'id', v_id,
+    'name', v_name,
+    'phone', v_phone,
+    'address', v_address,
+    'contact_name', v_contact,
+    'settlement_type', v_settlement,
+    'merchant_id', v_merchant_id
+  );
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION shop_channel_login(p_payload JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -279,38 +346,70 @@ SET search_path = public
 AS $$
 DECLARE
   v_merchant TEXT := trim(coalesce(p_payload->>'merchant_id', ''));
+  v_shop_id  TEXT := trim(coalesce(p_payload->>'shop_id', ''));
   v_login    TEXT := trim(coalesce(p_payload->>'login_id', ''));
   v_phone    TEXT := regexp_replace(v_login, '\s', '', 'g');
   v_pass     TEXT := trim(coalesce(p_payload->>'password', ''));
-  v_row      users%ROWTYPE;
+  v_user_id  TEXT;
+  v_result   JSONB;
 BEGIN
-  IF v_merchant = '' OR v_login = '' OR v_pass = '' THEN
+  IF v_merchant = '' OR v_pass = '' THEN
     RAISE EXCEPTION 'shop_login_required';
   END IF;
 
-  SELECT * INTO v_row FROM users
-  WHERE merchant_id = v_merchant
-    AND role = 'order'
-    AND active = TRUE
-    AND password_hash = v_pass
-    AND (id = v_login OR phone = v_phone)
-  LIMIT 1;
+  IF v_shop_id <> '' THEN
+    SELECT u.id INTO v_user_id
+    FROM users u
+    WHERE u.id = v_shop_id
+      AND u.merchant_id = v_merchant
+      AND u.role = 'order'
+      AND u.active = TRUE
+      AND u.password_hash = v_pass
+    LIMIT 1;
 
-  IF NOT FOUND THEN
+    IF v_user_id IS NOT NULL THEN
+      v_result := fos_shop_session_json(v_user_id);
+      IF v_result IS NOT NULL THEN RETURN v_result; END IF;
+    END IF;
+  END IF;
+
+  IF v_login = '' THEN
     RAISE EXCEPTION 'shop_login_invalid';
   END IF;
 
-  RETURN jsonb_build_object(
-    'id', v_row.id,
-    'name', v_row.name,
-    'phone', coalesce(v_row.phone, ''),
-    'address', coalesce(v_row.address, ''),
-    'contact_name', coalesce(v_row.contact_name, ''),
-    'settlement_type', coalesce(v_row.settlement_type, 'monthly'),
-    'merchant_id', v_row.merchant_id
-  );
+  SELECT u.id INTO v_user_id
+  FROM users u
+  WHERE u.merchant_id = v_merchant
+    AND u.role = 'order'
+    AND u.active = TRUE
+    AND u.password_hash = v_pass
+    AND (
+      u.id = v_login
+      OR trim(u.name) = v_login
+      OR (
+        v_phone <> ''
+        AND EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'phone'
+        )
+        AND u.phone = v_phone
+      )
+    )
+  LIMIT 1;
+
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'shop_login_invalid';
+  END IF;
+
+  v_result := fos_shop_session_json(v_user_id);
+  IF v_result IS NULL THEN
+    RAISE EXCEPTION 'shop_login_invalid';
+  END IF;
+  RETURN v_result;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION fos_shop_session_json(TEXT) TO anon, authenticated;
 
 GRANT EXECUTE ON FUNCTION shop_channel_login(JSONB) TO anon, authenticated;
 

@@ -324,12 +324,13 @@ FOS.publicOrder = {
     return data;
   },
 
-  async loginShopChannel({ merchantId, loginId, password } = {}) {
+  async loginShopChannel({ merchantId, loginId, password, shopId } = {}) {
     const { data, error } = await FOS.db.sb.rpc('shop_channel_login', {
       p_payload: {
         merchant_id: merchantId,
         login_id: loginId,
         password,
+        shop_id: shopId || '',
       },
     });
     if (error) throw error;

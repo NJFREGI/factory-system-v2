@@ -6,6 +6,19 @@ window.FOS = window.FOS || {};
 FOS.payment = {
   SETTLEMENT: { MONTHLY: 'monthly', CASH: 'cash' },
 
+  _customerMerchantId: '',
+
+  setCustomerMerchantId(id) {
+    FOS.payment._customerMerchantId = String(id || '').trim();
+  },
+
+  _merchantScopeId() {
+    return FOS.merchants?.scopeId?.()
+      || FOS.payment._customerMerchantId
+      || FOS.CONFIG?.DEFAULT_MERCHANT_ID
+      || 'default';
+  },
+
   DEFAULT_METHODS: [
     { id: 'local_cash', name: '現金', sort_order: 1 },
     { id: 'local_transfer', name: '振込', sort_order: 2 },
@@ -30,7 +43,7 @@ FOS.payment = {
   },
 
   _methodsStorageKey() {
-    return `payment_methods_${FOS.merchants.scopeId() || 'default'}`;
+    return `payment_methods_${FOS.payment._merchantScopeId()}`;
   },
 
   _isSchemaError(error) {
@@ -39,7 +52,7 @@ FOS.payment = {
   },
 
   _shopSettlementKey() {
-    return `shop_settlement_${FOS.merchants.scopeId() || 'default'}`;
+    return `shop_settlement_${FOS.payment._merchantScopeId()}`;
   },
 
   getShopSettlementOverrides() {
@@ -65,7 +78,7 @@ FOS.payment = {
   },
 
   _localPaymentsKey() {
-    return `payment_records_${FOS.merchants.scopeId() || 'default'}`;
+    return `payment_records_${FOS.payment._merchantScopeId()}`;
   },
 
   saveLocalPaymentRecord(orderId, data) {
@@ -132,7 +145,7 @@ FOS.payment = {
   async addMethod(name) {
     const trimmed = String(name || '').trim();
     if (!trimmed) throw new Error(FOS.i18n.t('名称を入力してください', '请输入名称'));
-    const merchantId = FOS.merchants.scopeId();
+    const merchantId = FOS.payment._merchantScopeId();
     const { data, error } = await FOS.db.sb.from('payment_methods').insert({
       merchant_id: merchantId,
       name: trimmed,

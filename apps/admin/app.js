@@ -3586,7 +3586,8 @@
           <span class="settings-panel__chevron" aria-hidden="true">›</span>
         </summary>
         <div class="settings-list-item__body">
-          <div class="settings-list-item__meta">ID ${FOS.fmt.escapeHtml(u.id)}</div>
+          <div class="settings-list-item__meta">${FOS.i18n.t('ログインID', '登录账号')}: <strong>${FOS.fmt.escapeHtml(u.id)}</strong></div>
+          <div class="settings-list-item__meta">${FOS.i18n.t('店舗名', '店名')}: ${FOS.fmt.escapeHtml(u.name)}</div>
           ${u.contact_name || u.phone ? `
           <div class="settings-list-item__meta">
             ${u.contact_name ? `${FOS.i18n.t('担当', '联系')}: ${FOS.fmt.escapeHtml(u.contact_name)}` : ''}
