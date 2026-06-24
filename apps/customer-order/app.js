@@ -57,6 +57,16 @@
     return deliveryCustomDate || null;
   }
 
+  function setCustomerMerchantIdSafe(merchantId) {
+    const id = String(merchantId || '').trim();
+    if (!id || !FOS.payment) return;
+    if (typeof FOS.payment.setCustomerMerchantId === 'function') {
+      FOS.payment.setCustomerMerchantId(id);
+    } else {
+      FOS.payment._customerMerchantId = id;
+    }
+  }
+
   async function boot() {
     FOS.wechatH5?.init?.();
     FOS.i18n.init();
@@ -100,7 +110,7 @@
       FOS.ui.showLoading();
       ctx = await FOS.publicOrder.getContext(params.channelId);
       allProducts = ctx.products || [];
-      FOS.payment.setCustomerMerchantId(ctx.merchant?.id || params.merchantId);
+      setCustomerMerchantIdSafe(ctx.merchant?.id || params.merchantId);
       if (!entrySettlement) entrySettlement = 'cash';
 
       shopSession = FOS.publicOrder.loadShopSession(ctx.merchant.id, ctx.channel.id);
@@ -173,6 +183,13 @@
 
   function renderError(msg) {
     let lookupHref = '#';
+    let retryHref = location.pathname + location.search;
+    try {
+      const retryUrl = new URL(location.href);
+      retryUrl.searchParams.delete('view');
+      retryUrl.searchParams.delete('code');
+      retryHref = retryUrl.pathname + retryUrl.search + retryUrl.hash;
+    } catch { /* use location fallback */ }
     try {
       lookupHref = FOS.publicOrder.buildLookupUrl();
     } catch {
@@ -186,7 +203,10 @@
         <div class="customer-order__error">
           <div style="font-size:40px">⚠️</div>
           <p>${FOS.fmt.escapeHtml(msg)}</p>
-          <a class="btn btn--primary" href="${FOS.fmt.escapeHtml(lookupHref)}">${FOS.i18n.t('注文照会', '订单查询')}</a>
+          <div class="customer-order__error-actions">
+            <a class="btn btn--primary" href="${FOS.fmt.escapeHtml(retryHref)}">${FOS.i18n.t('注文ページへ', '进入下单')}</a>
+            <a class="btn btn--secondary" href="${FOS.fmt.escapeHtml(lookupHref)}">${FOS.i18n.t('注文照会', '订单查询')}</a>
+          </div>
         </div>
       </div>`;
   }
