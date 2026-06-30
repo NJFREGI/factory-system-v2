@@ -5,7 +5,7 @@
 window.FOS = window.FOS || {};
 
 FOS.escpos = {
-  LINE_WIDTH: 32,
+  LINE_WIDTH: 48,
 
   bytesFromBase64(b64) {
     const bin = atob(b64);
@@ -157,6 +157,27 @@ FOS.escpos = {
     return FOS.i18n.t('個', '个');
   },
 
+  spacedTitle(text) {
+    return String(text || '').split('').join('\u3000');
+  },
+
+  infoRow(label, value) {
+    return FOS.escpos.lineText(FOS.escpos.padLine(String(label || ''), String(value || '')));
+  },
+
+  tableRow(name, qty, { bold = false } = {}) {
+    const n = String(name || '').trim() || '—';
+    const q = String(qty || '').trim();
+    const fits = FOS.escpos.displayWidth(n) + FOS.escpos.displayWidth(q) + 2 <= FOS.escpos.LINE_WIDTH;
+    if (fits) {
+      return FOS.escpos.styledLine(FOS.escpos.padLine(n, q), { bold });
+    }
+    return FOS.escpos.concat(
+      FOS.escpos.styledLine(n, { bold }),
+      FOS.escpos.lineText(FOS.escpos.padLine('', q))
+    );
+  },
+
   buildOutboundSlip(order, fields = {}) {
     const items = (order?.order_items || []).slice();
     const orderNo = FOS.escpos.formatOrderNo(order);
@@ -168,80 +189,76 @@ FOS.escpos = {
     const note = String(order?.note || order?.factory_note || '').trim();
     const totalQty = FOS.escpos.sumItemQty(items);
     const totalUnit = FOS.escpos.sumItemUnitLabel(items);
-    const title = FOS.i18n.t('出庫単', '出库单');
 
     const chunks = [
       FOS.escpos.init(),
       FOS.escpos.feed(1),
-      FOS.escpos.separator(),
-      FOS.escpos.styledLine(title, { align: 1, bold: true, size: 0x11 }),
+      FOS.escpos.styledLine(FOS.escpos.spacedTitle(FOS.i18n.t('納品書', '出库单')), { align: 1, bold: true, size: 0x11 }),
       FOS.escpos.feed(1),
-      FOS.escpos.styledLine(orderNo, { align: 1, bold: true, size: 0x11 }),
-      FOS.escpos.feed(1),
-      FOS.escpos.styledLine(customer, { bold: true, size: 0x10 }),
+      FOS.escpos.styledLine(FOS.i18n.t('下記の通り納品いたします', '配送明细如下'), { align: 1 }),
+      FOS.escpos.separator('='),
+      FOS.escpos.infoRow(FOS.i18n.t('伝票No.', '单号'), orderNo),
+      FOS.escpos.infoRow(FOS.i18n.t('納品日', '配送日'), deliveryDate),
     ];
 
-    if (phone && phone !== '—') {
-      chunks.push(
-        FOS.escpos.styledLine(`TEL ${phone}`, { bold: false }),
-        FOS.escpos.feed(1)
-      );
+    if (deliveryTime && deliveryTime !== '—') {
+      chunks.push(FOS.escpos.infoRow(FOS.i18n.t('配送時間', '配送时间'), deliveryTime));
     }
 
     chunks.push(
       FOS.escpos.separator(),
-      FOS.escpos.styledLine(FOS.i18n.t('配送日', '配送日期'), { bold: false }),
-      FOS.escpos.lineText(deliveryDate),
-      FOS.escpos.styledLine(FOS.i18n.t('配送時間', '配送时间'), { bold: false }),
-      FOS.escpos.lineText(deliveryTime),
+      FOS.escpos.styledLine(`${customer}\u3000${FOS.i18n.t('御中', '')}`.trim(), { bold: true, size: 0x10 }),
       FOS.escpos.separator()
     );
 
-    if (address && address !== '—') {
-      chunks.push(
-        FOS.escpos.styledLine(FOS.i18n.t('配送先', '配送地址'), { bold: false }),
-        FOS.escpos.lineText(address),
-        FOS.escpos.separator()
-      );
-    }
-
-    chunks.push(FOS.escpos.styledLine(FOS.i18n.t('商品明細', '商品明细'), { bold: true }));
+    chunks.push(
+      FOS.escpos.lineText(FOS.escpos.padLine(FOS.i18n.t('品名', '品名'), FOS.i18n.t('数量', '数量'))),
+      FOS.escpos.separator('-')
+    );
 
     items.forEach((item) => {
-      const name = String(item?.product_name || '').trim() || '—';
-      const qtyText = FOS.escpos.formatItemQty(item);
       chunks.push(
-        FOS.escpos.styledLine(name, { bold: true }),
-        FOS.escpos.lineText(FOS.escpos.padLine('', qtyText)),
-        FOS.escpos.feed(1)
+        FOS.escpos.tableRow(
+          String(item?.product_name || '').trim(),
+          FOS.escpos.formatItemQty(item),
+          { bold: true }
+        )
       );
     });
 
     chunks.push(
-      FOS.escpos.separator(),
+      FOS.escpos.separator('-'),
+      FOS.escpos.infoRow(FOS.i18n.t('品目数', '品目数'), `${items.length} ${FOS.i18n.t('品目', '项')}`),
       FOS.escpos.styledLine(
-        `${FOS.i18n.t('合計', '合计')}：${totalQty}${totalUnit}`,
+        FOS.escpos.padLine(FOS.i18n.t('合計数量', '合计数量'), `${totalQty} ${totalUnit}`),
         { bold: true, size: 0x10 }
       ),
-      FOS.escpos.separator()
+      FOS.escpos.separator('=')
     );
+
+    if ((address && address !== '—') || (phone && phone !== '—')) {
+      chunks.push(FOS.escpos.styledLine(FOS.i18n.t('お届け先', '配送地址'), { bold: true }));
+      if (address && address !== '—') chunks.push(FOS.escpos.lineText(address));
+      if (phone && phone !== '—') chunks.push(FOS.escpos.lineText(`TEL ${phone}`));
+      chunks.push(FOS.escpos.separator());
+    }
 
     if (note) {
       chunks.push(
-        FOS.escpos.styledLine(FOS.i18n.t('備考', '备注'), { bold: false }),
+        FOS.escpos.styledLine(FOS.i18n.t('備考', '备注'), { bold: true }),
         FOS.escpos.lineText(note),
         FOS.escpos.separator()
       );
     }
 
     chunks.push(
-      FOS.escpos.styledLine(FOS.i18n.t('署名', '签收栏'), { bold: false }),
-      FOS.escpos.lineText(`${FOS.i18n.t('署名', '签收')}：`),
-      FOS.escpos.lineText('________________'),
       FOS.escpos.feed(1),
-      FOS.escpos.lineText(`${FOS.i18n.t('時間', '时间')}：`),
-      FOS.escpos.lineText('________________'),
+      FOS.escpos.infoRow(FOS.i18n.t('受領印', '签收'), '\u3000\u3000\u3000/'),
       FOS.escpos.feed(2),
+      FOS.escpos.lineText(`${FOS.i18n.t('ご署名', '签名')} ____________________`),
+      FOS.escpos.feed(1),
+      FOS.escpos.lineText(`${FOS.i18n.t('日　時', '时间')} ____________________`),
+      FOS.escpos.feed(3),
       FOS.escpos.cut()
     );
 
