@@ -98,9 +98,9 @@ FOS.escpos = {
   },
 
   separator(char = '─') {
-    const w = FOS.escpos.LINE_WIDTH;
     const unit = FOS.escpos.displayWidth(char) || 1;
-    const count = Math.max(8, Math.floor(w / unit));
+    const usable = FOS.escpos.LINE_WIDTH - 2;
+    const count = Math.max(8, Math.floor(usable / unit));
     return FOS.escpos.lineText(String(char).repeat(count));
   },
 
@@ -141,6 +141,16 @@ FOS.escpos = {
     const qty = FOS.orders.deliveredQty(item);
     const unit = String(item?.product_spec || '').trim() || FOS.i18n.t('個', '个');
     return `${qty}${unit}`;
+  },
+
+  nameWithSpec(item) {
+    const name = String(item?.product_name || '').trim() || '—';
+    const spec = String(item?.product_spec || '').trim();
+    return spec ? `${name} ${spec}` : name;
+  },
+
+  formatItemCount(item) {
+    return String(FOS.orders.deliveredQty(item));
   },
 
   sumItemQty(items) {
@@ -188,7 +198,7 @@ FOS.escpos = {
     const deliveryTime = FOS.escpos.formatDeliveryTime(order);
     const note = String(order?.note || order?.factory_note || '').trim();
     const totalQty = FOS.escpos.sumItemQty(items);
-    const totalUnit = FOS.escpos.sumItemUnitLabel(items);
+    const factory = fields.factory || {};
 
     const chunks = [
       FOS.escpos.init(),
@@ -196,7 +206,7 @@ FOS.escpos = {
       FOS.escpos.styledLine(FOS.escpos.spacedTitle(FOS.i18n.t('納品書', '出库单')), { align: 1, bold: true, size: 0x11 }),
       FOS.escpos.feed(1),
       FOS.escpos.styledLine(FOS.i18n.t('下記の通り納品いたします', '配送明细如下'), { align: 1 }),
-      FOS.escpos.separator('='),
+      FOS.escpos.separator(),
       FOS.escpos.infoRow(FOS.i18n.t('伝票No.', '单号'), orderNo),
       FOS.escpos.infoRow(FOS.i18n.t('納品日', '配送日'), deliveryDate),
     ];
@@ -205,43 +215,35 @@ FOS.escpos = {
       chunks.push(FOS.escpos.infoRow(FOS.i18n.t('配送時間', '配送时间'), deliveryTime));
     }
 
-    chunks.push(
-      FOS.escpos.separator(),
-      FOS.escpos.styledLine(`${customer}\u3000${FOS.i18n.t('御中', '')}`.trim(), { bold: true, size: 0x10 }),
-      FOS.escpos.separator()
-    );
+    chunks.push(FOS.escpos.separator());
+    chunks.push(FOS.escpos.styledLine(`${customer}\u3000${FOS.i18n.t('御中', '')}`.trim(), { bold: true, size: 0x11 }));
+    if (address && address !== '—') chunks.push(FOS.escpos.lineText(address));
+    if (phone && phone !== '—') chunks.push(FOS.escpos.lineText(`TEL ${phone}`));
+    chunks.push(FOS.escpos.separator());
 
     chunks.push(
       FOS.escpos.lineText(FOS.escpos.padLine(FOS.i18n.t('品名', '品名'), FOS.i18n.t('数量', '数量'))),
-      FOS.escpos.separator('-')
+      FOS.escpos.separator()
     );
 
     items.forEach((item) => {
       chunks.push(
         FOS.escpos.tableRow(
-          String(item?.product_name || '').trim(),
-          FOS.escpos.formatItemQty(item),
+          FOS.escpos.nameWithSpec(item),
+          FOS.escpos.formatItemCount(item),
           { bold: true }
         )
       );
     });
 
     chunks.push(
-      FOS.escpos.separator('-'),
-      FOS.escpos.infoRow(FOS.i18n.t('品目数', '品目数'), `${items.length} ${FOS.i18n.t('品目', '项')}`),
+      FOS.escpos.separator(),
       FOS.escpos.styledLine(
-        FOS.escpos.padLine(FOS.i18n.t('合計数量', '合计数量'), `${totalQty} ${totalUnit}`),
+        FOS.escpos.padLine(FOS.i18n.t('合計数量', '合计数量'), `${totalQty}`),
         { bold: true, size: 0x10 }
       ),
-      FOS.escpos.separator('=')
+      FOS.escpos.separator()
     );
-
-    if ((address && address !== '—') || (phone && phone !== '—')) {
-      chunks.push(FOS.escpos.styledLine(FOS.i18n.t('お届け先', '配送地址'), { bold: true }));
-      if (address && address !== '—') chunks.push(FOS.escpos.lineText(address));
-      if (phone && phone !== '—') chunks.push(FOS.escpos.lineText(`TEL ${phone}`));
-      chunks.push(FOS.escpos.separator());
-    }
 
     if (note) {
       chunks.push(
@@ -251,18 +253,40 @@ FOS.escpos = {
       );
     }
 
-    chunks.push(
-      FOS.escpos.feed(1),
-      FOS.escpos.infoRow(FOS.i18n.t('受領印', '签收'), '\u3000\u3000\u3000/'),
-      FOS.escpos.feed(2),
-      FOS.escpos.lineText(`${FOS.i18n.t('ご署名', '签名')} ____________________`),
-      FOS.escpos.feed(1),
-      FOS.escpos.lineText(`${FOS.i18n.t('日　時', '时间')} ____________________`),
-      FOS.escpos.feed(3),
-      FOS.escpos.cut()
-    );
+    if (factory.name || factory.address || factory.tel) {
+      chunks.push(FOS.escpos.feed(1));
+      if (factory.name) chunks.push(FOS.escpos.styledLine(factory.name, { bold: true }));
+      if (factory.address) {
+        const zip = factory.zip ? `〒${factory.zip} ` : '';
+        chunks.push(FOS.escpos.lineText(`${zip}${factory.address}`));
+      }
+      if (factory.tel) chunks.push(FOS.escpos.lineText(`TEL ${factory.tel}`));
+    }
+
+    chunks.push(FOS.escpos.feed(3), FOS.escpos.cut());
 
     return FOS.escpos.concat(...chunks);
+  },
+
+  async resolveFactoryInfo() {
+    try {
+      if (FOS.invoiceSettings?.load) {
+        const inv = await FOS.invoiceSettings.load();
+        const name = String(inv?.companyName || '').trim();
+        const address = String(inv?.address || '').trim();
+        const tel = String(inv?.tel || '').trim();
+        const zip = String(inv?.zip || '').trim();
+        if (name || address || tel) return { name, address, tel, zip };
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      const merchant = await FOS.merchants.getById(FOS.merchants.scopeId());
+      return { name: String(merchant?.name || '').trim(), address: '', tel: '', zip: '' };
+    } catch {
+      return { name: '', address: '', tel: '', zip: '' };
+    }
   },
 
   async resolvePrintFields(order) {
@@ -293,6 +317,7 @@ FOS.escpos = {
 
   async buildOutboundPayload(order) {
     const fields = await FOS.escpos.resolvePrintFields(order);
+    fields.factory = await FOS.escpos.resolveFactoryInfo();
     const bytes = FOS.escpos.buildOutboundSlip(order, fields);
     return {
       bytes,
