@@ -32,10 +32,10 @@ FOS.CONFIG = {
 
   /** 套餐默认限制（可被 merchants 表字段覆盖） */
   PLAN_LIMITS: {
-    trial: { max_users: 3, max_products: 50 },
-    standard: { max_users: 10, max_products: 300 },
-    pro: { max_users: 30, max_products: 1000 },
-    enterprise: { max_users: 999, max_products: 9999 },
+    trial: { max_users: 3, max_products: 50, max_drivers: 1 },
+    standard: { max_users: 10, max_products: 300, max_drivers: 2 },
+    pro: { max_users: 30, max_products: 1000, max_drivers: 5 },
+    enterprise: { max_users: 999, max_products: 9999, max_drivers: 99 },
   },
 
   /** 销售额统计：排除的订单状态 */

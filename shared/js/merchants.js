@@ -61,6 +61,7 @@ FOS.merchants = {
       plan_type: plan,
       max_users: planLimits.max_users,
       max_products: planLimits.max_products,
+      max_drivers: planLimits.max_drivers,
       allow_order: true,
       allow_order_app: true,
       allow_admin_app: true,
@@ -108,6 +109,7 @@ FOS.merchants = {
       plan_type: plan,
       max_users: m.max_users ?? planDefaults.max_users,
       max_products: m.max_products ?? planDefaults.max_products,
+      max_drivers: m.max_drivers ?? planDefaults.max_drivers ?? 1,
       allow_order: m.allow_order !== false,
       allow_admin_app: m.allow_admin_app !== false,
       allow_order_app: m.allow_order_app !== false,
@@ -365,6 +367,128 @@ FOS.merchants = {
     });
   },
 
+  // ===== 配送员（多账号）管理 =====
+  async listDrivers(merchantId) {
+    const mid = merchantId || FOS.merchants.resolveMerchantId(FOS.auth?.user);
+    if (!mid) return [];
+    const { data, error } = await FOS.db.sb
+      .from('users')
+      .select('id, name, phone, active, created_at')
+      .eq('merchant_id', mid)
+      .eq('role', FOS.CONFIG.ROLES.DELIVERY)
+      .eq('active', true)
+      .order('created_at', { ascending: true });
+    if (error) throw new Error(error.message);
+    return data || [];
+  },
+
+  async countDrivers(merchantId) {
+    const mid = merchantId || FOS.merchants.resolveMerchantId(FOS.auth?.user);
+    if (!mid) return 0;
+    const { count, error } = await FOS.db.sb
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('merchant_id', mid)
+      .eq('role', FOS.CONFIG.ROLES.DELIVERY)
+      .eq('active', true);
+    if (error) {
+      console.warn('[FOS.merchants] countDrivers error:', error.message);
+      return 0;
+    }
+    return count || 0;
+  },
+
+  async driverLimit(merchantId) {
+    const merchant = await FOS.merchants.getById(merchantId);
+    return FOS.merchants.getLimits(merchant).max_drivers;
+  },
+
+  async assertCanAddDriver(merchantId) {
+    const mid = merchantId || FOS.merchants.resolveMerchantId(FOS.auth?.user);
+    const [limit, count] = await Promise.all([
+      FOS.merchants.driverLimit(mid),
+      FOS.merchants.countDrivers(mid),
+    ]);
+    if (count >= limit) {
+      throw new Error(
+        FOS.i18n.t(
+          `現在のプランでは最大${limit}名の配送員まで追加できます`,
+          `当前套餐最多允许添加 ${limit} 名配送员`
+        )
+      );
+    }
+  },
+
+  async createDriver({ merchantId, userId, password, displayName, phone }) {
+    const mid = merchantId || FOS.merchants.resolveMerchantId(FOS.auth?.user);
+    const uid = (userId || '').trim();
+    const pass = (password || '').trim();
+    if (!uid) throw new Error(FOS.i18n.t('配送員IDを入力してください', '请填写配送员 ID'));
+    if (!pass) throw new Error(FOS.i18n.t('パスワードを設定してください', '请设置密码'));
+
+    const { data: byId, error: byIdErr } = await FOS.db.sb
+      .from('users')
+      .select('id, role, merchant_id, active')
+      .eq('id', uid)
+      .maybeSingle();
+    if (byIdErr) throw new Error(byIdErr.message);
+
+    if (byId) {
+      const reusable =
+        byId.role === FOS.CONFIG.ROLES.DELIVERY &&
+        byId.active === false &&
+        (!byId.merchant_id || byId.merchant_id === mid);
+      if (!reusable) {
+        throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
+      }
+    }
+
+    await FOS.merchants.assertCanAddDriver(mid);
+
+    const payload = {
+      id: uid,
+      name: (displayName || '').trim() || uid,
+      phone: (phone || '').trim() || null,
+      role: FOS.CONFIG.ROLES.DELIVERY,
+      password_hash: pass,
+      merchant_id: mid,
+      active: true,
+    };
+
+    const result = byId
+      ? await FOS.db.sb.from('users').update(payload).eq('id', uid)
+      : await FOS.db.sb.from('users').insert(payload);
+    if (result.error) {
+      if (/duplicate|unique|23505/i.test(`${result.error.message} ${result.error.code || ''}`)) {
+        throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
+      }
+      throw new Error(result.error.message);
+    }
+  },
+
+  async updateDriver({ userId, displayName, password, phone }) {
+    const uid = (userId || '').trim();
+    if (!uid) throw new Error(FOS.i18n.t('配送員IDが不正です', '配送员 ID 无效'));
+    const update = {};
+    if (displayName != null) update.name = (displayName || '').trim() || uid;
+    if (phone != null) update.phone = (phone || '').trim() || null;
+    if ((password || '').trim()) update.password_hash = password.trim();
+    if (!Object.keys(update).length) return;
+    const { error } = await FOS.merchants.scopeFilter(
+      FOS.db.sb.from('users').update(update).eq('id', uid).eq('role', FOS.CONFIG.ROLES.DELIVERY)
+    );
+    if (error) throw new Error(error.message);
+  },
+
+  async deleteDriver(userId) {
+    const uid = (userId || '').trim();
+    if (!uid) return;
+    const { error } = await FOS.merchants.scopeFilter(
+      FOS.db.sb.from('users').update({ active: false }).eq('id', uid).eq('role', FOS.CONFIG.ROLES.DELIVERY)
+    );
+    if (error) throw new Error(error.message);
+  },
+
   async assertCanAddProduct(addCount = 1) {
     const merchant = await FOS.merchants.getCurrent();
     if (!merchant) return;
@@ -430,6 +554,9 @@ FOS.merchants = {
       max_products: Number.isFinite(Number(input.max_products))
         ? Number(input.max_products)
         : defaults.max_products,
+      max_drivers: Number.isFinite(Number(input.max_drivers))
+        ? Math.max(1, Number(input.max_drivers))
+        : (defaults.max_drivers ?? 1),
       allow_order: !!input.allow_order,
       allow_order_app: !!input.allow_order_app,
       allow_admin_app: !!input.allow_admin_app,

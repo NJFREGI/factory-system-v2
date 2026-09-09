@@ -388,14 +388,13 @@
     const main = document.getElementById('appMain');
     const passed = FOS.cutoff.isPassed();
     const cart = getCart();
+    const noticeHtml = FOS.orderSettings.notice
+      ? `<div class="order-notice-bar"><span class="order-notice-bar__text">${FOS.fmt.escapeHtml(FOS.orderSettings.notice)}</span></div>`
+      : '';
 
     main.innerHTML = `
       <div class="order-shop-head">
-        <div class="order-notice-bar${FOS.orderSettings.notice ? '' : ' order-notice-bar--empty'}">
-          ${FOS.orderSettings.notice
-            ? `<span class="order-notice-bar__text">${FOS.fmt.escapeHtml(FOS.orderSettings.notice)}</span>`
-            : `<span class="order-notice-bar__placeholder">${FOS.i18n.t('お知らせはありません', '暂无通知')}</span>`}
-        </div>
+        ${noticeHtml}
         <div class="cutoff-strip">
           <div>
             <div style="font-size:12px;color:var(--text-secondary)">${FOS.i18n.t('締め切り時間', '截单时间')}</div>

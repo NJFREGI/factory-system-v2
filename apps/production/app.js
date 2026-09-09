@@ -27,6 +27,13 @@
     return FOS.publicOrder?.isPublicOrder(order);
   }
 
+  // 配送员只看到分配给自己的单（或尚未分配的单）；工厂账号看全部
+  function driverCanSee(order) {
+    if (FOS.auth.user?.role !== 'delivery') return true;
+    if (!order.assigned_driver_id) return true;
+    return String(order.assigned_driver_id) === String(FOS.auth.user.id);
+  }
+
   function applySourceFilter(list) {
     if (!orderSourceFilter) return list;
     if (orderSourceFilter === 'shop') return list.filter((o) => FOS.publicOrder.isShopAccountOrder(o));
@@ -581,6 +588,42 @@
       FOS.ui.toast(FOS.i18n.t('決済方法を設定してください', '请先在后台设置结账方式'), 'error');
       return;
     }
+    const monthlyLabel = FOS.payment.settlementLabel(FOS.payment.SETTLEMENT.MONTHLY);
+    const useSettlement = editPayment || settlementType === FOS.payment.SETTLEMENT.CASH || isPublicOrder(order)
+      ? FOS.payment.SETTLEMENT.CASH
+      : settlementType;
+    const recordPayment = async ({ paymentMethodId, paymentMethodName }) => {
+      if (!paymentMethodName) return;
+      FOS.ui.showLoading();
+      try {
+        const result = await FOS.payment.recordDeliveryPayment(order.id, {
+          settlementType: paymentMethodName === monthlyLabel ? FOS.payment.SETTLEMENT.MONTHLY : useSettlement,
+          paymentMethodId,
+          paymentMethodName,
+        });
+        order.status = 'delivered';
+        order.settlement_type = paymentMethodName === monthlyLabel ? FOS.payment.SETTLEMENT.MONTHLY : useSettlement;
+        order.payment_method_name = paymentMethodName === monthlyLabel ? monthlyLabel : paymentMethodName;
+        order.payment_recorded_at = new Date().toISOString();
+        FOS.ui.closeModal();
+        FOS.ui.toast(
+          result?.local
+            ? (editPayment
+              ? FOS.i18n.t('決済方法を更新（端末に一時保存）', '结账方式已更新（暂存本机）')
+              : FOS.i18n.t('配達・決済完了（端末に一時保存）', '配送并记账完成（暂存本机）'))
+            : (editPayment
+              ? FOS.i18n.t('決済方法を更新しました', '结账方式已更新')
+              : FOS.i18n.t('配達・決済完了', '配送并记账完成')),
+          'success'
+        );
+        paintDeliveryList();
+        updateDeliveryStats();
+      } catch (e) {
+        FOS.ui.toast(e.message, 'error');
+      } finally {
+        FOS.ui.hideLoading();
+      }
+    };
     FOS.ui.openModal({
       title: editPayment
         ? FOS.i18n.t('決済方法を変更', '修改结账方式')
@@ -590,6 +633,13 @@
         <p class="payment-pick-shop">${FOS.fmt.escapeHtml(FOS.fmt.displayName(order.shop_name))}
           <span class="payment-pick-amount">${FOS.fmt.money(order.total)}</span></p>
         ${order.payment_method_name && editPayment ? `<p class="field__hint">${FOS.i18n.t('現在', '当前')}：${FOS.fmt.escapeHtml(order.payment_method_name)}</p>` : ''}
+        <div class="payment-scan-actions">
+          ${FOS.payment.DIGITAL_WALLETS.map((wallet) => `
+            <button type="button" class="btn btn--primary btn--lg payment-scan-btn" data-wallet-id="${FOS.fmt.escapeHtml(wallet.id)}">
+              ${FOS.fmt.escapeHtml(wallet.name)}${FOS.i18n.t('スキャン', '扫码')}
+            </button>
+          `).join('')}
+        </div>
         <div class="payment-pick-grid">
           ${methods.map((m) => `
             <button type="button" class="btn btn--secondary btn--lg payment-pick-btn" data-pm-id="${FOS.fmt.escapeHtml(String(m.id))}">${FOS.fmt.escapeHtml(m.name)}</button>
@@ -604,40 +654,45 @@
         const pmId = btn.dataset.pmId;
         const pm = methods.find((m) => String(m.id) === String(pmId));
         const pmName = pm?.name;
-        if (!pmName) return;
-        const monthlyLabel = FOS.payment.settlementLabel(FOS.payment.SETTLEMENT.MONTHLY);
-        const useSettlement = editPayment || settlementType === FOS.payment.SETTLEMENT.CASH || isPublicOrder(order)
-          ? FOS.payment.SETTLEMENT.CASH
-          : settlementType;
-        FOS.ui.showLoading();
-        try {
-          const result = await FOS.payment.recordDeliveryPayment(order.id, {
-            settlementType: pmName === monthlyLabel ? FOS.payment.SETTLEMENT.MONTHLY : useSettlement,
-            paymentMethodId: String(pmId).startsWith('local_') ? null : pmId,
-            paymentMethodName: pmName,
-          });
-          order.status = 'delivered';
-          order.settlement_type = pmName === monthlyLabel ? FOS.payment.SETTLEMENT.MONTHLY : useSettlement;
-          order.payment_method_name = pmName === monthlyLabel ? monthlyLabel : pmName;
-          order.payment_recorded_at = new Date().toISOString();
-          FOS.ui.closeModal();
-          FOS.ui.toast(
-            result?.local
-              ? (editPayment
-                ? FOS.i18n.t('決済方法を更新（端末に一時保存）', '结账方式已更新（暂存本机）')
-                : FOS.i18n.t('配達・決済完了（端末に一時保存）', '配送并记账完成（暂存本机）'))
-              : (editPayment
-                ? FOS.i18n.t('決済方法を更新しました', '结账方式已更新')
-                : FOS.i18n.t('配達・決済完了', '配送并记账完成')),
-            'success'
-          );
-          paintDeliveryList();
-          updateDeliveryStats();
-        } catch (e) {
-          FOS.ui.toast(e.message, 'error');
-        } finally {
-          FOS.ui.hideLoading();
+        await recordPayment({
+          paymentMethodId: String(pmId).startsWith('local_') ? null : pmId,
+          paymentMethodName: pmName,
+        });
+      });
+    });
+    document.querySelectorAll('.payment-scan-btn').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const selectedWallet = FOS.payment.digitalWalletById(btn.dataset.walletId);
+        if (!selectedWallet) return;
+        if (!FOS.barcodeScanner?.canUseLiveCamera?.()) {
+          FOS.ui.toast(FOS.i18n.t('この端末ではカメラスキャンに対応していません', '当前设备不支持摄像头扫码'), 'error');
+          return;
         }
+
+        let scannedCode = '';
+        try {
+          scannedCode = await FOS.barcodeScanner.scan({
+            nativePaymentScanner: true,
+            fullscreen: true,
+            title: FOS.i18n.t('支払コードをスキャン', '扫描付款码'),
+            hint: FOS.i18n.t('QRコードまたはバーコードを中央に合わせてください', '请将付款二维码或条形码对准中央'),
+            subhint: FOS.i18n.t('読み取り後、選択した決済方法で記録します', '扫码后会按选择的结账方式记账'),
+          });
+        } catch (e) {
+          if (e.message !== 'cancelled') FOS.ui.toast(e.message, 'error');
+          return;
+        }
+
+        const detectedWallet = FOS.payment.detectWalletByAuthCode(scannedCode);
+        let wallet = detectedWallet || selectedWallet;
+        if (detectedWallet && detectedWallet.id !== selectedWallet.id) {
+          const ok = FOS.ui.confirm(FOS.i18n.t(
+            `読み取ったコードは ${detectedWallet.name} の可能性があります。${detectedWallet.name} として記録しますか？`,
+            `识别到的付款码可能是${detectedWallet.name}。是否按${detectedWallet.name}记账？`
+          ));
+          if (!ok) wallet = selectedWallet;
+        }
+        await recordPayment({ paymentMethodId: null, paymentMethodName: wallet.name });
       });
     });
   }
@@ -706,7 +761,7 @@
             <div class="delivery-card__row delivery-card__row--top">
               <strong class="delivery-card__no">#${order.order_no}</strong>
               <span class="delivery-card__shop">${FOS.fmt.escapeHtml(isPublic ? (order.customer_name || order.shop_name) : FOS.fmt.displayName(order.shop_name))}</span>
-              <span class="delivery-card__badges">${settlementBadge}${publicPayBadge}</span>
+              <span class="delivery-card__badges">${settlementBadge}${publicPayBadge}${order.assigned_driver_name ? `<span class="badge badge--purple delivery-driver-badge">🚚 ${FOS.fmt.escapeHtml(order.assigned_driver_name)}</span>` : ''}</span>
               ${FOS.dragReorder.handleHtml(FOS.i18n.t('順序変更', '调整顺序'), 'delivery-card__sort-handle')}
             </div>
             ${contactLine ? `<div class="delivery-card__contact">${FOS.fmt.escapeHtml(contactLine)}</div>` : ''}
@@ -771,7 +826,7 @@
   }
 
   async function renderDelivery() {
-    await loadOrders((o) => ['preparing', 'shipped', 'delivered'].includes(o.status));
+    await loadOrders((o) => ['preparing', 'shipped', 'delivered'].includes(o.status) && driverCanSee(o));
     shopMap = await FOS.payment.loadShopSettlementMap();
     const schemaReady = await FOS.payment.isSchemaReady();
     if (!deliveryDateFilter) deliveryDateFilter = FOS.fmt.today();
@@ -831,7 +886,7 @@
   }
 
   async function renderDeliveryPayments() {
-    await loadOrders((o) => ['delivered', 'confirmed'].includes(o.status));
+    await loadOrders((o) => ['delivered', 'confirmed'].includes(o.status) && driverCanSee(o));
     shopMap = await FOS.payment.loadShopSettlementMap();
     orders = FOS.payment.enrichOrders(orders);
     const schemaReady = await FOS.payment.isSchemaReady();

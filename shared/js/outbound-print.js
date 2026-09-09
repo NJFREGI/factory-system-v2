@@ -47,8 +47,29 @@ FOS.outboundPrint = {
     throw new Error(FOS.i18n.t('LAN印刷はアプリからご利用ください', '请在管理端 APP 中使用 LAN 打印'));
   },
 
+  async sendCloud(payload, cfg) {
+    if (!FOS.hprtCloud?.sendPrintTask) {
+      throw new Error(FOS.i18n.t('汉印云模块未加载', '汉印云模块未加载'));
+    }
+    await FOS.hprtCloud.sendPrintTask(cfg, {
+      content: payload.content,
+      orderNo: payload.orderNo,
+      printType: 'ESC',
+    });
+    return true;
+  },
+
   async testPrint(cfg) {
     const settings = cfg || await FOS.printerSettings.load();
+    if (settings.type === 'cloud') {
+      if (!FOS.printerSettings.isCloudReady(settings)) {
+        throw new Error(FOS.i18n.t('汉印云配置不完整', '请完整填写汉印云 userKey、userSecret、打印机 SN'));
+      }
+      const content = FOS.hprtCloudPrint.buildTestContent(settings.equipmentSn);
+      await FOS.outboundPrint.sendCloud({ content }, settings);
+      return true;
+    }
+
     const host = String(settings.ip || '').trim();
     if (!host) throw new Error(FOS.i18n.t('プリンターIP未設定', '未配置打印机 IP'));
 
@@ -73,22 +94,37 @@ FOS.outboundPrint = {
     if (!cfg.enabled) {
       return { ok: true, skipped: true };
     }
-    if (cfg.type !== 'lan') {
-      return {
-        ok: false,
-        skipped: false,
-        error: FOS.i18n.t('現時点ではLAN印刷のみ対応', '当前仅支持网络打印机'),
-      };
-    }
 
     const count = copies || cfg.copies || 1;
     const device = FOS.printerSettings.deviceLabel(cfg);
 
     try {
-      const payload = await FOS.escpos.buildOutboundPayload(order);
-      for (let i = 0; i < count; i++) {
-        await FOS.outboundPrint.sendLan(payload, cfg);
+      if (cfg.type === 'cloud') {
+        if (!FOS.printerSettings.isCloudReady(cfg)) {
+          return {
+            ok: false,
+            skipped: false,
+            error: FOS.i18n.t('汉印云配置不完整', '请完整填写汉印云 userKey、userSecret、打印机 SN'),
+          };
+        }
+        const payload = await FOS.hprtCloudPrint.buildOutboundPayload(order);
+        const orderNo = String(order.order_no || order.public_order_code || order.id || '').slice(0, 40);
+        for (let i = 0; i < count; i++) {
+          await FOS.outboundPrint.sendCloud({ content: payload.content, orderNo }, cfg);
+        }
+      } else if (cfg.type === 'lan') {
+        const payload = await FOS.escpos.buildOutboundPayload(order);
+        for (let i = 0; i < count; i++) {
+          await FOS.outboundPrint.sendLan(payload, cfg);
+        }
+      } else {
+        return {
+          ok: false,
+          skipped: false,
+          error: FOS.i18n.t('対応していないプリンター種別', '不支持的打印机类型'),
+        };
       }
+
       await FOS.outboundPrint.logPrint({
         orderId: order.id,
         printType,

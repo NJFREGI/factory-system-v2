@@ -1,11 +1,21 @@
 /**
- * ESC/POS 出库配送单（80mm 热敏厨房单风格）
- * 兼容汉印 TP80NY / TP80R、ZYWELL、芯烨等 LAN 9100 口
+ * ESC/POS 出库配送单（80mm 热敏）
+ * 兼容汉印 TP80NY / TP80R、ZYWELL、芯烨 LAN 及汉印云 ESC 标记
  */
 window.FOS = window.FOS || {};
 
 FOS.escpos = {
-  LINE_WIDTH: 48,
+  LINE_WIDTH: 46,
+
+  /** 80mm 安全打印区：左右各留 1 字符边距，46×12=552 dots */
+  SLIP_LAYOUT: {
+    LINE_CHARS: 46,
+    DOTS_PER_CHAR: 12,
+    PRINTABLE_DOTS: 552,
+    RIGHT_EDGE_CHARS: 46,
+    NAME_COL_CHARS: 40,
+    QTY_COL_CHARS: 6,
+  },
 
   bytesFromBase64(b64) {
     const bin = atob(b64);
@@ -68,8 +78,18 @@ FOS.escpos = {
   },
 
   feed(lines = 1) {
-    const n = Math.max(1, lines | 0);
+    const n = Math.max(0, lines | 0);
+    if (n === 0) return new Uint8Array(0);
     return Uint8Array.from(Array(n).fill(0x0A));
+  },
+
+  /** ESC 3 n — 缩小行距（商品明细区用） */
+  setLineSpacing(dots = 24) {
+    return FOS.escpos.cmd(0x1B, 0x33, Math.max(0, Math.min(255, dots | 0)));
+  },
+
+  resetLineSpacing() {
+    return FOS.escpos.cmd(0x1B, 0x32);
   },
 
   cut() {
@@ -80,28 +100,140 @@ FOS.escpos = {
     let w = 0;
     for (const ch of String(str || '')) {
       const code = ch.codePointAt(0) || 0;
-      w += code > 0xFF ? 2 : 1;
+      w += code > 0xff ? 2 : 1;
     }
     return w;
   },
 
-  padLine(left, right, width) {
-    const lineWidth = width || FOS.escpos.LINE_WIDTH;
-    const l = String(left || '');
-    const r = String(right || '');
-    const gap = Math.max(1, lineWidth - FOS.escpos.displayWidth(l) - FOS.escpos.displayWidth(r));
+  wrapDisplayWidth(str, maxWidth) {
+    const max = Math.max(4, maxWidth | 0);
+    const text = String(str || '');
+    if (!text) return [''];
+    const lines = [];
+    let cur = '';
+    let curW = 0;
+    for (const ch of text) {
+      const cw = FOS.escpos.displayWidth(ch);
+      if (cur && curW + cw > max) {
+        lines.push(cur);
+        cur = ch;
+        curW = cw;
+      } else {
+        cur += ch;
+        curW += cw;
+      }
+    }
+    if (cur) lines.push(cur);
+    return lines.length ? lines : [''];
+  },
+
+  padTwoCol(left, right, lineWidth) {
+    const lw = lineWidth || FOS.escpos.LINE_WIDTH;
+    const l = String(left ?? '');
+    const r = String(right ?? '');
+    const gap = Math.max(1, lw - FOS.escpos.displayWidth(l) - FOS.escpos.displayWidth(r));
     return l + ' '.repeat(gap) + r;
   },
 
-  lineText(text) {
-    return FOS.escpos.concat(FOS.escpos.textBytes(text), FOS.escpos.feed(1));
+  itemTwoColRows(name, qty, lineWidth) {
+    const spec = FOS.escpos.SLIP_LAYOUT;
+    const nameMax = lineWidth
+      ? Math.max(4, (lineWidth | 0) - spec.QTY_COL_CHARS)
+      : spec.NAME_COL_CHARS;
+    const q = String(qty ?? '');
+    const parts = FOS.escpos.wrapDisplayWidth(String(name || '').trim() || '—', nameMax);
+    return parts.map((part, i) => ({ part, qty: i === 0 ? q : '', isFirst: i === 0 }));
   },
 
-  separator(char = '─') {
-    const unit = FOS.escpos.displayWidth(char) || 1;
-    const usable = FOS.escpos.LINE_WIDTH - 2;
-    const count = Math.max(8, Math.floor(usable / unit));
-    return FOS.escpos.lineText(String(char).repeat(count));
+  /** ESC $ 横向绝对位置（dots，203dpi / 80mm） */
+  horizontalPosDots(dots) {
+    const n = Math.max(0, Math.min(65535, dots | 0));
+    return FOS.escpos.cmd(0x1B, 0x24, n & 0xff, (n >> 8) & 0xff);
+  },
+
+  dotsPerChar(size = 0x00) {
+    return FOS.escpos.SLIP_LAYOUT.DOTS_PER_CHAR * ((size & 0x10) ? 2 : 1);
+  },
+
+  /** 右列固定右边界（不用空格填充） */
+  rightColStartDots(rightText, { size = 0x00, rightEdgeChars } = {}) {
+    const edge = rightEdgeChars ?? FOS.escpos.SLIP_LAYOUT.RIGHT_EDGE_CHARS;
+    const dpc = FOS.escpos.dotsPerChar(size);
+    const rw = FOS.escpos.displayWidth(String(rightText ?? ''));
+    return edge * dpc - rw * dpc;
+  },
+
+  slipRightEdge() {
+    return FOS.escpos.SLIP_LAYOUT.RIGHT_EDGE_CHARS;
+  },
+
+  printLrCols(left, right, { bold = false, size = 0x00, rightEdgeChars } = {}) {
+    const edge = rightEdgeChars ?? FOS.escpos.slipRightEdge();
+    const pos = FOS.escpos.rightColStartDots(right, { size, rightEdgeChars: edge });
+    return FOS.escpos.concat(
+      FOS.escpos.align(0),
+      FOS.escpos.bold(bold),
+      FOS.escpos.size(size),
+      FOS.escpos.textBytes(String(left ?? '')),
+      FOS.escpos.horizontalPosDots(pos),
+      FOS.escpos.textBytes(String(right ?? '')),
+      FOS.escpos.feed(1),
+      FOS.escpos.bold(false),
+      FOS.escpos.size(0x00),
+      FOS.escpos.align(0)
+    );
+  },
+
+  printItemRows(name, qty, { size = 0x00 } = {}) {
+    const edge = FOS.escpos.slipRightEdge();
+    const rows = FOS.escpos.itemTwoColRows(name, qty);
+    return FOS.escpos.concat(
+      ...rows.map((row) => {
+        if (row.isFirst) {
+          return FOS.escpos.printLrCols(row.part, row.qty, { size, rightEdgeChars: edge });
+        }
+        return FOS.escpos.concat(
+          FOS.escpos.align(0),
+          FOS.escpos.size(size),
+          FOS.escpos.lineText(row.part),
+          FOS.escpos.size(0x00),
+          FOS.escpos.align(0)
+        );
+      })
+    );
+  },
+
+  printItemQtyLine(prefix, qty, suffix) {
+    return FOS.escpos.concat(
+      FOS.escpos.align(0),
+      FOS.escpos.bold(true),
+      FOS.escpos.size(0x00),
+      FOS.escpos.textBytes(String(prefix ?? '')),
+      FOS.escpos.size(0x11),
+      FOS.escpos.textBytes(String(qty ?? '')),
+      FOS.escpos.size(0x00),
+      FOS.escpos.textBytes(String(suffix ?? '')),
+      FOS.escpos.feed(1),
+      FOS.escpos.bold(false),
+      FOS.escpos.align(0)
+    );
+  },
+
+  fullSepLine(lineWidth) {
+    const lw = lineWidth || FOS.escpos.LINE_WIDTH;
+    return '-'.repeat(lw);
+  },
+
+  padLine(left, right, width) {
+    return FOS.escpos.padTwoCol(left, right, width);
+  },
+
+  lineText(text, { feedLines = 1 } = {}) {
+    return FOS.escpos.concat(FOS.escpos.textBytes(text), FOS.escpos.feed(feedLines));
+  },
+
+  separator() {
+    return FOS.escpos.lineText(FOS.escpos.fullSepLine());
   },
 
   styledLine(text, { align = 0, bold = false, size = 0x00 } = {}) {
@@ -128,19 +260,13 @@ FOS.escpos = {
   },
 
   formatDeliveryTime(order) {
-    if (!order) return '—';
+    if (!order) return '';
     const parts = [];
     if (order.delivery_preferred_slot && order.delivery_preferred_slot !== 'unspecified') {
       parts.push(FOS.publicOrder?.slotLabel?.(order.delivery_preferred_slot) || order.delivery_preferred_slot);
     }
     if (order.delivery_time_note) parts.push(order.delivery_time_note);
-    return parts.length ? parts.join(' ') : '—';
-  },
-
-  formatItemQty(item) {
-    const qty = FOS.orders.deliveredQty(item);
-    const unit = String(item?.product_spec || '').trim() || FOS.i18n.t('個', '个');
-    return `${qty}${unit}`;
+    return parts.join(' ').trim();
   },
 
   nameWithSpec(item) {
@@ -157,114 +283,250 @@ FOS.escpos = {
     return (items || []).reduce((sum, item) => sum + FOS.orders.deliveredQty(item), 0);
   },
 
-  sumItemUnitLabel(items) {
-    const units = new Set(
-      (items || [])
-        .map((item) => String(item?.product_spec || '').trim())
-        .filter(Boolean)
-    );
-    if (units.size === 1) return [...units][0];
-    return FOS.i18n.t('個', '个');
-  },
-
   spacedTitle(text) {
     return String(text || '').split('').join('\u3000');
   },
 
-  infoRow(label, value) {
-    return FOS.escpos.lineText(FOS.escpos.padLine(String(label || ''), String(value || '')));
+  formatIssueDate(date = new Date()) {
+    return date.toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
   },
 
-  tableRow(name, qty, { bold = false } = {}) {
-    const n = String(name || '').trim() || '—';
-    const q = String(qty || '').trim();
-    const fits = FOS.escpos.displayWidth(n) + FOS.escpos.displayWidth(q) + 2 <= FOS.escpos.LINE_WIDTH;
-    if (fits) {
-      return FOS.escpos.styledLine(FOS.escpos.padLine(n, q), { bold });
+  formatSlipNo(order) {
+    const date = String(order?.order_date || '').replace(/-/g, '');
+    const no = String(order?.order_no || order?.public_order_code || order?.id || '').trim();
+    const padded = /^\d+$/.test(no) ? no.padStart(3, '0') : no;
+    return `NO.${date || FOS.escpos.formatIssueDate().replace(/\D/g, '')}-${padded || '-'}`;
+  },
+
+  money(value) {
+    const n = Number(value) || 0;
+    return `¥${Math.round(n).toLocaleString('ja-JP')}`;
+  },
+
+  itemLineAmount(item) {
+    return (Number(item?.unit_price) || 0) * FOS.orders.deliveredQty(item);
+  },
+
+  orderTotals(order) {
+    const items = order?.order_items || [];
+    const subtotal = items.reduce((sum, item) => sum + FOS.escpos.itemLineAmount(item), 0);
+    const tax = items.reduce((sum, item) => {
+      const rate = Number(item?.tax_rate) || 0;
+      return sum + Math.round((FOS.escpos.itemLineAmount(item) * rate) / 100);
+    }, 0);
+    const hasNumber = (value) => value != null && value !== '' && Number.isFinite(Number(value));
+    return {
+      subtotal: hasNumber(order?.subtotal) ? Number(order.subtotal) : subtotal,
+      tax: hasNumber(order?.tax_total) ? Number(order.tax_total) : tax,
+      total: hasNumber(order?.total) ? Number(order.total) : subtotal + tax,
+    };
+  },
+
+  formatTaxRate(rate) {
+    const n = Number(rate);
+    if (!Number.isFinite(n)) return '';
+    return Number.isInteger(n) ? String(n) : String(n).replace(/\.0+$/, '');
+  },
+
+  taxBreakdown(order) {
+    const byRate = new Map();
+    (order?.order_items || []).forEach((item) => {
+      const rate = Number(item?.tax_rate);
+      if (!Number.isFinite(rate) || rate < 0) return;
+      const amount = FOS.escpos.itemLineAmount(item);
+      const tax = Math.round((amount * rate) / 100);
+      byRate.set(rate, (byRate.get(rate) || 0) + tax);
+    });
+    const rates = [...new Set([8, 10, ...byRate.keys()])]
+      .filter((rate) => Number.isFinite(rate) && rate >= 0)
+      .sort((a, b) => a - b);
+    return rates.map((rate) => ({ rate, tax: byRate.get(rate) || 0 }));
+  },
+
+  taxRateLabel(order) {
+    const rates = [...new Set((order?.order_items || [])
+      .map((item) => Number(item?.tax_rate))
+      .filter((rate) => Number.isFinite(rate) && rate >= 0))]
+      .sort((a, b) => a - b);
+    if (!rates.length) return '';
+    return `${rates.map((rate) => FOS.escpos.formatTaxRate(rate)).join('/')}%`;
+  },
+
+  displayCustomerName(name) {
+    const raw = String(name || '').trim();
+    return FOS.fmt?.displayName ? FOS.fmt.displayName(raw) : raw;
+  },
+
+  ruleLine(char = '-', lineWidth = FOS.escpos.LINE_WIDTH) {
+    const ch = String(char || '-').charAt(0) || '-';
+    const safeWidth = Math.max(8, Math.min(lineWidth || FOS.escpos.LINE_WIDTH, 42));
+    return ch.repeat(safeWidth);
+  },
+
+  /** 共享配送单布局（ESC/POS 与汉印云共用） */
+  buildOutboundSlipLayout(order, fields = {}, { lineWidth = 48 } = {}) {
+    const items = (order?.order_items || []).slice();
+    const destName = String(
+      fields.customerName || order?.customer_name || order?.shop_name || ''
+    ).trim() || '—';
+    const phone = String(fields.phone || order?.customer_phone || '').trim();
+    const address = String(fields.address || order?.customer_address || '').trim();
+    const deliveryDate = FOS.escpos.formatDeliveryDate(order);
+    const note = String(order?.note || order?.factory_note || '').trim();
+    const factory = fields.factory || {};
+    const issuerName = String(factory.name || '').trim();
+    const totals = FOS.escpos.orderTotals(order);
+    const taxBreakdown = FOS.escpos.taxBreakdown(order);
+    const taxLine = taxBreakdown.length
+      ? taxBreakdown.map(({ rate, tax }) => `消費税${FOS.escpos.money(tax)}（${FOS.escpos.formatTaxRate(rate)}%）`).join(' ')
+      : `消費税${FOS.escpos.money(totals.tax)}`;
+    const indent = '';
+
+    const lines = [];
+    lines.push({ kind: 'rule', char: '=' });
+    if (issuerName) lines.push({ kind: 'merchant', text: issuerName });
+    lines.push({ kind: 'title', text: FOS.escpos.spacedTitle('納品書') });
+    lines.push({ kind: 'rule', char: '=' });
+    lines.push({ kind: 'text', text: `発行日${FOS.escpos.formatIssueDate()}`, tight: true });
+    lines.push({ kind: 'text', text: `伝票番号${FOS.escpos.formatSlipNo(order)}`, tight: true });
+    lines.push({ kind: 'text', text: `納品日${deliveryDate}`, tight: true });
+    lines.push({ kind: 'rule', char: '-' });
+    lines.push({ kind: 'label-lg', text: 'お届け先' });
+    lines.push({ kind: 'dest', text: FOS.escpos.displayCustomerName(destName) });
+    if (address) {
+      FOS.escpos.wrapDisplayWidth(`住所: ${address}`, lineWidth).forEach((text) => lines.push({ kind: 'text', text }));
     }
-    return FOS.escpos.concat(
-      FOS.escpos.styledLine(n, { bold }),
-      FOS.escpos.lineText(FOS.escpos.padLine('', q))
-    );
+    if (phone) lines.push({ kind: 'phone', text: `TEL: ${phone}` });
+    lines.push({ kind: 'rule', char: '=' });
+
+    items.forEach((item, idx) => {
+      const qty = FOS.orders.deliveredQty(item);
+      const unitPrice = Number(item?.unit_price) || 0;
+      const amount = unitPrice * qty;
+      FOS.escpos.wrapDisplayWidth(FOS.escpos.nameWithSpec(item), lineWidth - 5).forEach((text, i) => {
+        lines.push({ kind: 'item-name', text: i === 0 ? `${indent}${text}` : `${indent}   ${text}`, tight: true });
+      });
+      lines.push({
+        kind: 'item-qty-line',
+        prefix: `${indent}数量:`,
+        qty: String(qty),
+        suffix: `  単価:${FOS.escpos.money(unitPrice)}  金額:${FOS.escpos.money(amount)}`,
+        tight: true,
+      });
+      if (FOS.orders.shortageQty(item) > 0) {
+        const reason = String(item.shortage_note || '').trim();
+        lines.push({ kind: 'item-name', text: `${indent}${`欠品 ${reason}`.trim()}`, tight: true });
+      }
+      lines.push({ kind: 'rule', char: '-' });
+    });
+    lines.push({ kind: 'text', text: `${indent}小計${FOS.escpos.money(totals.subtotal)}（税抜）`, tight: true });
+    lines.push({ kind: 'text', text: `${indent}${taxLine}`, tight: true });
+    lines.push({ kind: 'rule', char: '=' });
+    lines.push({ kind: 'total-text', text: `${indent}合計金額（税込） ${FOS.escpos.money(totals.total)}`, tight: true });
+    lines.push({ kind: 'rule', char: '=' });
+    if (note) {
+      lines.push({ kind: 'label', text: '【備考】' });
+      FOS.escpos.wrapDisplayWidth(note, lineWidth).forEach((text) => lines.push({ kind: 'text', text }));
+    }
+    return lines;
   },
 
   buildOutboundSlip(order, fields = {}) {
-    const items = (order?.order_items || []).slice();
-    const orderNo = FOS.escpos.formatOrderNo(order);
-    const customer = fields.customerName || order?.customer_name || order?.shop_name || '—';
-    const phone = fields.phone || '—';
-    const address = fields.address || '—';
-    const deliveryDate = FOS.escpos.formatDeliveryDate(order);
-    const deliveryTime = FOS.escpos.formatDeliveryTime(order);
-    const note = String(order?.note || order?.factory_note || '').trim();
-    const totalQty = FOS.escpos.sumItemQty(items);
-    const factory = fields.factory || {};
+    const lineWidth = FOS.escpos.LINE_WIDTH;
+    const layout = FOS.escpos.buildOutboundSlipLayout(order, fields, { lineWidth });
+    const chunks = [FOS.escpos.init()];
+    let compactItems = false;
 
-    const chunks = [
-      FOS.escpos.init(),
-      FOS.escpos.feed(1),
-      FOS.escpos.styledLine(FOS.escpos.spacedTitle(FOS.i18n.t('納品書', '出库单')), { align: 1, bold: true, size: 0x11 }),
-      FOS.escpos.feed(1),
-      FOS.escpos.styledLine(FOS.i18n.t('下記の通り納品いたします', '配送明细如下'), { align: 1 }),
-      FOS.escpos.separator(),
-      FOS.escpos.infoRow(FOS.i18n.t('伝票No.', '单号'), orderNo),
-      FOS.escpos.infoRow(FOS.i18n.t('納品日', '配送日'), deliveryDate),
-    ];
-
-    if (deliveryTime && deliveryTime !== '—') {
-      chunks.push(FOS.escpos.infoRow(FOS.i18n.t('配送時間', '配送时间'), deliveryTime));
-    }
-
-    chunks.push(FOS.escpos.separator());
-    chunks.push(FOS.escpos.styledLine(`${customer}\u3000${FOS.i18n.t('御中', '')}`.trim(), { bold: true, size: 0x11 }));
-    if (address && address !== '—') chunks.push(FOS.escpos.lineText(address));
-    if (phone && phone !== '—') chunks.push(FOS.escpos.lineText(`TEL ${phone}`));
-    chunks.push(FOS.escpos.separator());
-
-    chunks.push(
-      FOS.escpos.lineText(FOS.escpos.padLine(FOS.i18n.t('品名', '品名'), FOS.i18n.t('数量', '数量'))),
-      FOS.escpos.separator()
-    );
-
-    items.forEach((item) => {
-      chunks.push(
-        FOS.escpos.tableRow(
-          FOS.escpos.nameWithSpec(item),
-          FOS.escpos.formatItemCount(item),
-          { bold: true }
-        )
-      );
+    layout.forEach((row) => {
+      if (row.kind === 'sep' || row.kind === 'rule') {
+        if (compactItems) {
+          chunks.push(FOS.escpos.resetLineSpacing());
+          compactItems = false;
+        }
+        const text = row.kind === 'rule'
+          ? FOS.escpos.ruleLine(row.char, lineWidth)
+          : FOS.escpos.fullSepLine(lineWidth);
+        chunks.push(FOS.escpos.lineText(text));
+        return;
+      }
+      const emit = (bytes) => {
+        if (row.tight) chunks.push(FOS.escpos.setLineSpacing(18));
+        chunks.push(bytes);
+        if (row.tight) chunks.push(FOS.escpos.resetLineSpacing());
+      };
+      if (row.kind === 'merchant') {
+        emit(FOS.escpos.styledLine(row.text, { align: 1, bold: true, size: 0x11 }));
+        return;
+      }
+      if (row.kind === 'title') {
+        emit(FOS.escpos.styledLine(row.text, { align: 1, bold: true, size: 0x01 }));
+        return;
+      }
+      if (row.kind === 'dest') {
+        emit(FOS.escpos.styledLine(row.text, { bold: true, size: 0x01 }));
+        return;
+      }
+      if (row.kind === 'info') {
+        emit(FOS.escpos.printLrCols(row.left, row.right, {
+          size: row.emphasize ? 0x11 : 0x00,
+          rightEdgeChars: FOS.escpos.slipRightEdge(),
+        }));
+        return;
+      }
+      if (row.kind === 'phone') {
+        emit(FOS.escpos.lineText(row.text));
+        return;
+      }
+      if (row.kind === 'label-lg') {
+        emit(FOS.escpos.styledLine(row.text, { bold: true, size: 0x00 }));
+        return;
+      }
+      if (row.kind === 'row') {
+        chunks.push(FOS.escpos.setLineSpacing(22));
+        compactItems = true;
+        chunks.push(FOS.escpos.printLrCols(row.left, row.right, {
+          bold: true,
+          size: 0x00,
+          rightEdgeChars: FOS.escpos.slipRightEdge(),
+        }));
+        return;
+      }
+      if (row.kind === 'total') {
+        emit(FOS.escpos.printLrCols(row.left, row.right, {
+          bold: true,
+          size: 0x01,
+          rightEdgeChars: FOS.escpos.slipRightEdge(),
+        }));
+        return;
+      }
+      if (row.kind === 'total-text') {
+        emit(FOS.escpos.styledLine(row.text, { bold: true, size: 0x00 }));
+        return;
+      }
+      if (row.kind === 'label') {
+        emit(FOS.escpos.styledLine(row.text, { bold: true, size: 0x00 }));
+        return;
+      }
+      if (row.kind === 'item-name') {
+        emit(FOS.escpos.styledLine(row.text, { bold: true, size: 0x01 }));
+        return;
+      }
+      if (row.kind === 'item-qty-line') {
+        emit(FOS.escpos.printItemQtyLine(row.prefix, row.qty, row.suffix));
+        return;
+      }
+      if (row.kind === 'item') {
+        emit(FOS.escpos.printItemRows(row.name, row.qty, { size: 0x00 }));
+        return;
+      }
+      if (row.kind === 'text') {
+        emit(FOS.escpos.lineText(row.text));
+      }
     });
 
-    chunks.push(
-      FOS.escpos.separator(),
-      FOS.escpos.styledLine(
-        FOS.escpos.padLine(FOS.i18n.t('合計数量', '合计数量'), `${totalQty}`),
-        { bold: true, size: 0x10 }
-      ),
-      FOS.escpos.separator()
-    );
+    if (compactItems) chunks.push(FOS.escpos.resetLineSpacing());
 
-    if (note) {
-      chunks.push(
-        FOS.escpos.styledLine(FOS.i18n.t('備考', '备注'), { bold: true }),
-        FOS.escpos.lineText(note),
-        FOS.escpos.separator()
-      );
-    }
-
-    if (factory.name || factory.address || factory.tel) {
-      chunks.push(FOS.escpos.feed(1));
-      if (factory.name) chunks.push(FOS.escpos.styledLine(factory.name, { bold: true }));
-      if (factory.address) {
-        const zip = factory.zip ? `〒${factory.zip} ` : '';
-        chunks.push(FOS.escpos.lineText(`${zip}${factory.address}`));
-      }
-      if (factory.tel) chunks.push(FOS.escpos.lineText(`TEL ${factory.tel}`));
-    }
-
-    chunks.push(FOS.escpos.feed(3), FOS.escpos.cut());
-
+    chunks.push(FOS.escpos.feed(1), FOS.escpos.cut());
     return FOS.escpos.concat(...chunks);
   },
 
@@ -310,8 +572,8 @@ FOS.escpos = {
 
     return {
       customerName: customerName || '—',
-      phone: phone || '—',
-      address: address || '—',
+      phone,
+      address,
     };
   },
 

@@ -276,6 +276,40 @@ FOS.printDoc = {
     });
   },
 
+  async downloadPdfDirect({ title, bodyHtml, filename, docClass, htmlLang }) {
+    if (!bodyHtml) {
+      FOS.ui.toast(FOS.i18n.t('データなし', '暂无数据'), 'error');
+      return false;
+    }
+    const fname = filename || 'document.pdf';
+    FOS.ui.showLoading(FOS.i18n.t('PDF生成中...', '正在生成 PDF...'));
+    try {
+      const blob = await FOS.printDoc.renderPdfBlob({ bodyHtml, docClass, htmlLang });
+      const saved = await FOS.printDoc.savePdfBlob(blob, fname);
+      if (saved) {
+        FOS.ui.toast(
+          FOS.native?.isApp?.()
+            ? FOS.i18n.t('ダウンロードフォルダに保存しました', '已保存到下载文件夹')
+            : FOS.i18n.t('PDFを保存しました', 'PDF 已保存'),
+          'success'
+        );
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.warn('direct pdf download failed:', e);
+      try {
+        FOS.printDoc.downloadHtml({ title, bodyHtml, filename: fname, htmlLang });
+        return false;
+      } catch {
+        FOS.ui.toast(FOS.i18n.t('PDFの保存に失敗しました', 'PDF 保存失败'), 'error');
+        return false;
+      }
+    } finally {
+      FOS.ui.hideLoading();
+    }
+  },
+
   async downloadPdf({ title, bodyHtml, filename, docClass, htmlLang }) {
     return FOS.printDoc.promptDownload({ title, bodyHtml, filename, docClass, htmlLang });
   },

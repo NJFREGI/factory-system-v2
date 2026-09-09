@@ -399,6 +399,18 @@ FOS.orders = {
     })).sort((a, b) => b.order_date.localeCompare(a.order_date));
   },
 
+  async assignDriver(orderId, driverId, driverName) {
+    const payload = {
+      assigned_driver_id: driverId || null,
+      assigned_driver_name: driverId ? (driverName || null) : null,
+      updated_at: new Date().toISOString(),
+    };
+    const { error } = await FOS.merchants.scopeFilter(
+      FOS.db.sb.from('orders').update(payload).eq('id', orderId)
+    );
+    if (error) throw new Error(error.message);
+  },
+
   async updateStatus(orderId, status) {
     const { data: order } = await FOS.db.sb
       .from('orders')

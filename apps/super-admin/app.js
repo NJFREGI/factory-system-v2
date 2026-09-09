@@ -10,6 +10,7 @@
   let listSearch = '';
   let listStatus = '';
   let editingId = null;
+  let editingPrinterSettings = null;
   let salesRangeFrom = '';
   let salesRangeTo = '';
   const merchantCustomRanges = {};
@@ -76,10 +77,66 @@
     merchants = await FOS.merchants.listAll({ search: listSearch, status: listStatus });
   }
 
-  function merchantFormHtml(merchant, { isCreate, admin, delivery }) {
+  function printerDefaults() {
+    return {
+      enabled: false,
+      type: 'cloud',
+      ip: '',
+      port: 9100,
+      copies: 1,
+      userKey: '',
+      userSecret: '',
+      equipmentSn: '',
+    };
+  }
+
+  function normalizePrinterSettings(raw) {
+    const cfg = { ...printerDefaults(), ...(raw || {}) };
+    cfg.enabled = !!cfg.enabled;
+    cfg.type = cfg.type === 'lan' ? 'lan' : 'cloud';
+    cfg.ip = String(cfg.ip || '').trim();
+    const port = parseInt(cfg.port, 10);
+    cfg.port = Number.isFinite(port) && port > 0 ? port : 9100;
+    const copies = parseInt(cfg.copies, 10);
+    cfg.copies = [1, 2, 3].includes(copies) ? copies : 1;
+    cfg.userKey = String(cfg.userKey || '').trim();
+    cfg.userSecret = String(cfg.userSecret || '').trim();
+    cfg.equipmentSn = String(cfg.equipmentSn || cfg.equipment_sn || '').trim();
+    return cfg;
+  }
+
+  async function loadPrinterSettings(merchantId) {
+    const key = `printer_settings_${merchantId}`;
+    try {
+      const { data } = await FOS.db.sb
+        .from('settings')
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+      const value = typeof data?.value === 'string' ? JSON.parse(data.value) : data?.value;
+      return normalizePrinterSettings(value);
+    } catch {
+      return printerDefaults();
+    }
+  }
+
+  async function savePrinterSettings(merchantId, raw) {
+    const cfg = normalizePrinterSettings(raw);
+    await FOS.db.sb.from('settings').upsert({
+      key: `printer_settings_${merchantId}`,
+      value: JSON.stringify(cfg),
+      updated_at: new Date().toISOString(),
+    });
+    return cfg;
+  }
+
+  function merchantFormHtml(merchant, { isCreate, admin, delivery, printer }) {
     const m = merchant || {};
     const plan = m.plan_type || 'standard';
     const limits = FOS.merchants.planDefaults(plan);
+    const printerSettings = normalizePrinterSettings(printer);
+    const isPrinterCloud = printerSettings.type !== 'lan';
+    const savedSecretLabel = FOS.i18n.t('保存済み', '已保存');
     const hasAdmin = !!admin?.id;
     const adminId = admin?.id || (isCreate && m.id ? `${m.id}_factory` : '');
     const adminIdReadonly = !isCreate && hasAdmin;
@@ -149,6 +206,11 @@
             <input class="field__input" type="number" id="mfMaxProducts" min="1"
               value="${m.max_products ?? limits.max_products}">
           </label>
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('最大配送員数', '最大配送员数')}</span>
+            <input class="field__input" type="number" id="mfMaxDrivers" min="1"
+              value="${m.max_drivers ?? limits.max_drivers ?? 1}">
+          </label>
         </div>
 
         <div class="merchant-form-section">
@@ -190,6 +252,55 @@
         </div>
 
         <div class="merchant-form-section">
+          <div class="merchant-form-section__title">${FOS.i18n.t('プリンター設定', '打印机设置')}</div>
+          <div class="form-grid form-grid--2">
+            <label class="check-field">
+              <input type="checkbox" id="mfPrinterEnabled" ${printerSettings.enabled ? 'checked' : ''}>
+              <span>${FOS.i18n.t('出庫印刷を有効化', '启用出库打印')}</span>
+            </label>
+            <label class="field">
+              <span class="field__label">${FOS.i18n.t('プリンター種別', '打印机类型')}</span>
+              <select class="field__input" id="mfPrinterType">
+                <option value="cloud" ${isPrinterCloud ? 'selected' : ''}>${FOS.i18n.t('汉印云', '汉印云打印')}</option>
+                <option value="lan" ${printerSettings.type === 'lan' ? 'selected' : ''}>${FOS.i18n.t('ネットワーク(LAN)', '局域网打印机')}</option>
+              </select>
+            </label>
+          </div>
+          <div class="form-grid form-grid--2" id="mfPrinterCloudFields" style="${isPrinterCloud ? '' : 'display:none'}">
+            <label class="field">
+              <span class="field__label">userKey</span>
+              <input class="field__input" id="mfPrinterUserKey" type="password" value="" placeholder="${printerSettings.userKey ? FOS.fmt.escapeHtml(savedSecretLabel) : ''}" autocomplete="new-password">
+            </label>
+            <label class="field">
+              <span class="field__label">userSecret</span>
+              <input class="field__input" id="mfPrinterUserSecret" type="password" value="" placeholder="${printerSettings.userSecret ? FOS.fmt.escapeHtml(savedSecretLabel) : ''}" autocomplete="new-password">
+            </label>
+            <label class="field">
+              <span class="field__label">${FOS.i18n.t('プリンターSN', '打印机 SN')}</span>
+              <input class="field__input" id="mfPrinterEquipmentSn" value="${FOS.fmt.escapeHtml(printerSettings.equipmentSn || '')}">
+            </label>
+          </div>
+          <div class="form-grid form-grid--2" id="mfPrinterLanFields" style="${printerSettings.type === 'lan' ? '' : 'display:none'}">
+            <label class="field">
+              <span class="field__label">IP</span>
+              <input class="field__input" id="mfPrinterIp" value="${FOS.fmt.escapeHtml(printerSettings.ip || '')}" placeholder="192.168.1.100">
+            </label>
+            <label class="field">
+              <span class="field__label">${FOS.i18n.t('ポート', '端口')}</span>
+              <input class="field__input" id="mfPrinterPort" type="number" min="1" max="65535" value="${printerSettings.port || 9100}">
+            </label>
+          </div>
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('印刷部数', '打印份数')}</span>
+            <select class="field__input" id="mfPrinterCopies">
+              <option value="1" ${printerSettings.copies === 1 ? 'selected' : ''}>1</option>
+              <option value="2" ${printerSettings.copies === 2 ? 'selected' : ''}>2</option>
+              <option value="3" ${printerSettings.copies === 3 ? 'selected' : ''}>3</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="merchant-form-section">
           <div class="merchant-form-section__title">${FOS.i18n.t('利用制限', '使用限制')}</div>
           <div class="form-grid form-grid--2">
             <label class="check-field">
@@ -223,6 +334,20 @@
       </form>`;
   }
 
+  function readPrinterForm() {
+    const existing = editingPrinterSettings || printerDefaults();
+    return normalizePrinterSettings({
+      enabled: !!document.getElementById('mfPrinterEnabled')?.checked,
+      type: document.getElementById('mfPrinterType')?.value || 'cloud',
+      ip: document.getElementById('mfPrinterIp')?.value,
+      port: document.getElementById('mfPrinterPort')?.value,
+      copies: document.getElementById('mfPrinterCopies')?.value,
+      userKey: document.getElementById('mfPrinterUserKey')?.value || existing.userKey,
+      userSecret: document.getElementById('mfPrinterUserSecret')?.value || existing.userSecret,
+      equipmentSn: document.getElementById('mfPrinterEquipmentSn')?.value,
+    });
+  }
+
   function readMerchantForm() {
     return {
       id: document.getElementById('mfId')?.value,
@@ -234,6 +359,7 @@
       plan_type: document.getElementById('mfPlan')?.value,
       max_users: document.getElementById('mfMaxUsers')?.value,
       max_products: document.getElementById('mfMaxProducts')?.value,
+      max_drivers: document.getElementById('mfMaxDrivers')?.value,
       allow_order: document.getElementById('mfAllowOrder')?.checked,
       allow_order_app: document.getElementById('mfAllowOrderApp')?.checked,
       allow_admin_app: document.getElementById('mfAllowAdminApp')?.checked,
@@ -243,6 +369,7 @@
       admin_password: document.getElementById('mfAdminPass')?.value,
       delivery_id: document.getElementById('mfDeliveryId')?.value,
       delivery_password: document.getElementById('mfDeliveryPass')?.value,
+      printer_settings: readPrinterForm(),
     };
   }
 
@@ -267,18 +394,34 @@
       const limits = FOS.merchants.planDefaults(e.target.value);
       const usersEl = modal.querySelector('#mfMaxUsers');
       const productsEl = modal.querySelector('#mfMaxProducts');
+      const driversEl = modal.querySelector('#mfMaxDrivers');
       if (usersEl) usersEl.value = limits.max_users;
       if (productsEl) productsEl.value = limits.max_products;
+      if (driversEl && limits.max_drivers != null) driversEl.value = limits.max_drivers;
     });
+  }
+
+  function bindPrinterTypeFields(modal) {
+    const sync = () => {
+      const type = modal.querySelector('#mfPrinterType')?.value || 'cloud';
+      const cloudEl = modal.querySelector('#mfPrinterCloudFields');
+      const lanEl = modal.querySelector('#mfPrinterLanFields');
+      if (cloudEl) cloudEl.style.display = type === 'cloud' ? '' : 'none';
+      if (lanEl) lanEl.style.display = type === 'lan' ? '' : 'none';
+    };
+    modal.querySelector('#mfPrinterType')?.addEventListener('change', sync);
+    sync();
   }
 
   function openCreateModal() {
     editingId = null;
+    editingPrinterSettings = printerDefaults();
     const modal = FOS.ui.openModal({
       title: FOS.i18n.t('商家を追加', '新增商家'),
-      bodyHtml: merchantFormHtml(null, { isCreate: true }),
+      bodyHtml: merchantFormHtml(null, { isCreate: true, printer: editingPrinterSettings }),
     });
     bindPlanAutoFill(modal);
+    bindPrinterTypeFields(modal);
     bindAccountIdAutoFill(modal);
     modal.querySelector('#merchantForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -288,16 +431,19 @@
 
   async function openEditModal(merchant) {
     editingId = merchant.id;
-    const [admin, delivery] = await Promise.all([
+    const [admin, delivery, printer] = await Promise.all([
       FOS.merchants.getFactoryAdmin(merchant.id),
       FOS.merchants.getDeliveryAdmin(merchant.id),
+      loadPrinterSettings(merchant.id),
     ]);
+    editingPrinterSettings = printer;
     const modal = FOS.ui.openModal({
       title: FOS.i18n.t('商家を編集', '编辑商家') + ` — ${merchant.name}`,
-      bodyHtml: merchantFormHtml(merchant, { isCreate: false, admin, delivery }),
+      bodyHtml: merchantFormHtml(merchant, { isCreate: false, admin, delivery, printer }),
       size: 'lg',
     });
     bindPlanAutoFill(modal);
+    bindPrinterTypeFields(modal);
     modal.querySelector('#merchantForm')?.addEventListener('submit', async (e) => {
       e.preventDefault();
       await saveMerchant(false);
@@ -335,15 +481,17 @@
     FOS.ui.showLoading();
     try {
       if (isCreate) {
+        const merchantId = input.id.trim();
         await FOS.merchants.create(input);
         await FOS.merchants.saveFactoryAdmin({
-          merchantId: input.id.trim(),
+          merchantId,
           userId: input.admin_id,
           password: input.admin_password,
           displayName: input.name,
           isCreate: true,
         });
-        await saveDeliveryAccount(input.id.trim(), input);
+        await saveDeliveryAccount(merchantId, input);
+        await savePrinterSettings(merchantId, input.printer_settings);
       } else {
         await FOS.merchants.update(editingId, input);
         const admin = await FOS.merchants.getFactoryAdmin(editingId);
@@ -357,6 +505,7 @@
           });
         }
         await saveDeliveryAccount(editingId, input);
+        await savePrinterSettings(editingId, input.printer_settings);
       }
       FOS.ui.closeModal();
       FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');

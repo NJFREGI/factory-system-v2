@@ -1,4 +1,4 @@
-window.FOS = window.FOS || {};
+﻿window.FOS = window.FOS || {};
 
 FOS.dailySummary = {
   async load(date) {
@@ -66,6 +66,125 @@ FOS.dailySummary = {
       <ul class="order-line-items daily-summary-lines">${rows}</ul>`;
   },
 
+  displayDate(date) {
+    const m = String(date || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if (!m) return String(date || '');
+    return `${m[1]}年${Number(m[2])}月${Number(m[3])}日`;
+  },
+
+  printItemName(item) {
+    const name = String(item?.name || '').trim() || '—';
+    const spec = String(item?.spec || '').trim();
+    return spec ? `${name} (${spec})` : name;
+  },
+
+  printQty(qty) {
+    const n = Number(qty);
+    if (!Number.isFinite(n)) return String(qty ?? '');
+    return Number.isInteger(n) ? n.toLocaleString('ja-JP') : String(qty);
+  },
+
+  buildReceiptBytes(data) {
+    const title = `${FOS.dailySummary.displayDate(data.date)} 商品集計`;
+    const chunks = [
+      FOS.escpos.init(),
+      FOS.escpos.lineText(FOS.escpos.ruleLine('=')),
+      FOS.escpos.styledLine(title, { align: 1, bold: true, size: 0x01 }),
+      FOS.escpos.lineText(FOS.escpos.ruleLine('=')),
+      FOS.escpos.setLineSpacing(26),
+    ];
+
+    (data.items || []).forEach((item, idx) => {
+      const qty = FOS.dailySummary.printQty(item.total_qty);
+      const rows = FOS.escpos.itemTwoColRows(FOS.dailySummary.printItemName(item), qty, FOS.escpos.LINE_WIDTH);
+      rows.forEach((row) => {
+        if (row.isFirst) {
+          chunks.push(FOS.escpos.styledLine(FOS.escpos.padLine(row.part, row.qty, FOS.escpos.LINE_WIDTH), { bold: true, size: 0x01 }));
+        } else {
+          chunks.push(FOS.escpos.styledLine(row.part, { bold: true, size: 0x01 }));
+        }
+      });
+      if (idx < (data.items || []).length - 1) {
+        chunks.push(FOS.escpos.lineText(FOS.escpos.fullSepLine(FOS.escpos.LINE_WIDTH)));
+      }
+    });
+
+    chunks.push(
+      FOS.escpos.resetLineSpacing(),
+      FOS.escpos.lineText(FOS.escpos.ruleLine('=')),
+      FOS.escpos.feed(1),
+      FOS.escpos.cut()
+    );
+    return FOS.escpos.concat(...chunks);
+  },
+
+  buildReceiptCloudContent(data) {
+    const title = `${FOS.dailySummary.displayDate(data.date)} 商品集計`;
+    const lw = FOS.hprtCloudPrint?.LINE_WIDTH || FOS.escpos.LINE_WIDTH;
+    let content = '<Init>';
+    content += FOS.hprtCloudPrint.line(FOS.escpos.ruleLine('='), { font: 'F' });
+    content += FOS.hprtCloudPrint.line(title, { align: 'Center', font: 'FH', bold: true });
+    content += FOS.hprtCloudPrint.line(FOS.escpos.ruleLine('='), { font: 'F' });
+
+    (data.items || []).forEach((item, idx) => {
+      const qty = FOS.dailySummary.printQty(item.total_qty);
+      const rows = FOS.escpos.itemTwoColRows(FOS.dailySummary.printItemName(item), qty, lw);
+      rows.forEach((row) => {
+        if (row.isFirst) {
+          content += FOS.hprtCloudPrint.line(FOS.escpos.padLine(row.part, row.qty, lw), { font: 'FH', bold: true });
+        } else {
+          content += FOS.hprtCloudPrint.line(row.part, { font: 'FH', bold: true });
+        }
+      });
+      if (idx < (data.items || []).length - 1) {
+        content += FOS.hprtCloudPrint.line(FOS.escpos.fullSepLine(lw), { font: 'F' });
+      }
+    });
+
+    content += FOS.hprtCloudPrint.line(FOS.escpos.ruleLine('='), { font: 'F' });
+    content += '<BR><DCUT m=65 n=0>';
+    return content;
+  },
+
+  async printReceipt(data) {
+    if (!data?.items?.length) {
+      FOS.ui.toast(FOS.i18n.t('データなし', '暂无数据'), 'error');
+      return false;
+    }
+    const cfg = await FOS.printerSettings.load();
+    if (!cfg.enabled) {
+      FOS.ui.toast(FOS.i18n.t('プリンター設定が無効です', '打印机设置未启用'), 'error');
+      return false;
+    }
+
+    const copies = cfg.copies || 1;
+    if (cfg.type === 'cloud') {
+      if (!FOS.printerSettings.isCloudReady(cfg)) {
+        FOS.ui.toast(FOS.i18n.t('漢印クラウド設定が未完了です', '汉印云打印机设置未完整'), 'error');
+        return false;
+      }
+      const content = FOS.dailySummary.buildReceiptCloudContent(data);
+      for (let i = 0; i < copies; i++) {
+        await FOS.outboundPrint.sendCloud({ content, orderNo: `summary-${data.date}` }, cfg);
+      }
+    } else if (cfg.type === 'lan') {
+      if (!FOS.printerSettings.isLanReady(cfg)) {
+        FOS.ui.toast(FOS.i18n.t('LANプリンター設定が未完了です', 'LAN 打印机设置未完整'), 'error');
+        return false;
+      }
+      const base64 = FOS.escpos.bytesToBase64(FOS.dailySummary.buildReceiptBytes(data));
+      for (let i = 0; i < copies; i++) {
+        await FOS.outboundPrint.sendLan({ base64 }, cfg);
+      }
+    } else {
+      FOS.ui.toast(FOS.i18n.t('対応していないプリンター種別です', '不支持的打印机类型'), 'error');
+      return false;
+    }
+
+    FOS.ui.toast(FOS.i18n.t('印刷送信済み', '已发送打印任务'), 'success');
+    return true;
+  },
+
   exportPdf(data) {
     if (!data?.items?.length) {
       FOS.ui.toast(FOS.i18n.t('データなし', '暂无数据'), 'error');
@@ -108,10 +227,14 @@ FOS.dailySummary = {
         </table>
       </div>`;
 
-    return FOS.printDoc.downloadPdf({
+    const payload = {
       title: `${FOS.i18n.t('日次集計', '日统计')} ${data.date}`,
       bodyHtml: body,
       filename: `daily_summary_${data.date}.pdf`,
-    });
+    };
+    return FOS.printDoc.downloadPdfDirect
+      ? FOS.printDoc.downloadPdfDirect(payload)
+      : FOS.printDoc.downloadPdf(payload);
   },
 };
+

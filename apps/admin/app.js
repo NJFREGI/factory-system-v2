@@ -823,9 +823,65 @@
     return `<button type="button" class="btn btn--secondary btn--sm" data-reprint="${order.id}">🖨 ${FOS.i18n.t('配送単再印刷', '补打配送单')}</button>`;
   }
 
+  function orderAssignHtml(order, driverList) {
+    if (!driverList || !driverList.length) {
+      return `
+        <div class="admin-order-section__label">${FOS.i18n.t('配送員', '配送员')}</div>
+        <div class="field__hint">${FOS.i18n.t('配送員が未登録です。設定 → 配送員管理から追加してください。', '尚未添加配送员，可在 设置 → 配送员管理 添加。')}</div>`;
+    }
+    const current = order.assigned_driver_id || (driverList.length === 1 ? driverList[0].id : '');
+    return `
+      <div class="admin-order-section__label">${FOS.i18n.t('配送員の割り当て', '派单（指定配送员）')}</div>
+      <div class="order-assign">
+        <select class="field__input" id="orderAssignDriver">
+          <option value="">${FOS.i18n.t('未割当', '未派单')}</option>
+          ${driverList.map((d) => `<option value="${FOS.fmt.escapeHtml(String(d.id))}" ${current === d.id ? 'selected' : ''}>${FOS.fmt.escapeHtml(d.name || String(d.id))}</option>`).join('')}
+        </select>
+      </div>`;
+  }
+
+  function bindOrderAssign(root, order, driverList) {
+    const sel = root?.querySelector('#orderAssignDriver');
+    if (!sel) return;
+    sel.addEventListener('change', async () => {
+      const driverId = sel.value || null;
+      const driver = (driverList || []).find((d) => String(d.id) === String(driverId));
+      FOS.ui.showLoading();
+      try {
+        await FOS.orders.assignDriver(order.id, driverId, driver?.name || driver?.id || null);
+        order.assigned_driver_id = driverId;
+        order.assigned_driver_name = driver?.name || driver?.id || null;
+        FOS.ui.toast(
+          driverId
+            ? FOS.i18n.t(`「${driver?.name || driverId}」に割り当てました`, `已派给「${driver?.name || driverId}」`)
+            : FOS.i18n.t('割り当てを解除しました', '已取消派单'),
+          'success'
+        );
+      } catch (e) {
+        FOS.ui.toast(e.message, 'error');
+      } finally {
+        FOS.ui.hideLoading();
+      }
+    });
+  }
+
+  async function maybeAutoAssignSingleDriver(orderId) {
+    try {
+      const list = await FOS.merchants.listDrivers(FOS.merchants.scopeId());
+      if (list.length !== 1) return;
+      const order = await FOS.orders.fetchOne(orderId);
+      if (order && !order.assigned_driver_id) {
+        await FOS.orders.assignDriver(orderId, list[0].id, list[0].name || list[0].id);
+      }
+    } catch (e) {
+      console.warn('[admin] auto-assign driver:', e.message);
+    }
+  }
+
   async function handleOutboundOrder(orderId) {
     FOS.ui.showLoading();
     try {
+      await maybeAutoAssignSingleDriver(orderId);
       const result = await FOS.outboundPrint.shipAndPrint(orderId);
       FOS.ui.toast(result.message, result.printFailed ? 'error' : 'success');
       if (adminDetailOrderId) await renderAdminOrderDetailPage();
@@ -1137,6 +1193,7 @@
       return `<div class="summary-page__toolbar">
         <button type="button" class="btn btn--primary btn--sm" id="loadSummaryBtn">${FOS.i18n.t('集計', '汇总')}</button>
         <button type="button" class="btn btn--secondary btn--sm" id="exportSummaryBtn">📥 ${FOS.i18n.t('PDF保存', '保存 PDF')}</button>
+        <button type="button" class="btn btn--secondary btn--sm" id="printSummaryBtn">🖨 ${FOS.i18n.t('小票印刷', '小票打印')}</button>
       </div>`;
     }
     if (summaryHubTab === 'public') {
@@ -1205,6 +1262,12 @@
         try {
           const data = await FOS.dailySummary.load(summaryDate);
           FOS.dailySummary.exportPdf(data);
+        } catch (e) { FOS.ui.toast(e.message, 'error'); }
+      });
+      document.getElementById('printSummaryBtn')?.addEventListener('click', async () => {
+        try {
+          const data = await FOS.dailySummary.load(summaryDate);
+          await FOS.dailySummary.printReceipt(data);
         } catch (e) { FOS.ui.toast(e.message, 'error'); }
       });
       await loadSummary();
@@ -3006,6 +3069,12 @@
       mergedOrders = rows.filter(Boolean)
         .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
     }
+    let driverList = [];
+    try {
+      driverList = await FOS.merchants.listDrivers(FOS.merchants.scopeId());
+    } catch (e) {
+      console.warn('[admin] listDrivers:', e.message);
+    }
     FOS.ui.hideLoading();
     if (!order) {
       FOS.ui.toast(FOS.i18n.t('注文が見つかりません', '未找到订单'), 'error');
@@ -3068,6 +3137,7 @@
         <div class="admin-order-section__label">${FOS.i18n.t('商品一覧', '商品列表')}</div>
         <ul class="order-line-items">${items || `<li class="order-line-item">${FOS.i18n.t('商品なし', '暂无商品')}</li>`}</ul>
         ${mergedBlock}
+        ${orderAssignHtml(order, driverList)}
         <div class="admin-order-actions admin-order-detail__actions">
           ${orderEditBtnHtml(order.id)}
           ${orderStatusActionsHtml(order)}
@@ -3077,6 +3147,7 @@
 
     document.getElementById('adminOrderDetailBack')?.addEventListener('click', closeAdminOrderDetail);
     bindOrderDetailActions(main);
+    bindOrderAssign(main, order, driverList);
   }
 
   function paintPaymentsBody() {
@@ -3307,6 +3378,7 @@
     await FOS.cutoff.load();
     await FOS.orderSettings.load();
     await FOS.printerSettings.load();
+    await FOS.paycloudSettings.load();
     await FOS.appUrls.loadPublicBase();
     const invoiceProfile = await FOS.invoiceSettings.load();
     await loadShops();
@@ -3324,12 +3396,8 @@
           ${FOS.i18n.t('商品', '商品')} ${usage.products}/${usage.limits.max_products}
         </div>
         <div class="settings-panels">
-          ${settingsPanelHtml('payment', '💳', FOS.i18n.t('都度払い方法', '现结结账方式'), `
-            <div id="paymentMethodsList"></div>
-            <div class="payment-method-add">
-              <input class="field__input" id="newPaymentMethodName" placeholder="${FOS.i18n.t('例：現金、振込', '例：现金、转账')}">
-              <button type="button" class="btn btn--primary btn--sm" id="addPaymentMethodBtn">＋ ${FOS.i18n.t('追加', '添加')}</button>
-            </div>`, { asLink: true })}
+          ${settingsPanelHtml('payment', '💳', FOS.i18n.t('支払設定', '支付设置'), `
+            <p class="settings-panel__hint">${FOS.i18n.t('PayCloudと都度払い方法を設定します', '设置 PayCloud 和现结结账方式')}</p>`, { asLink: true })}
           ${settingsPanelHtml('cutoff', '⏰', FOS.i18n.t('締め切り時間', '截单时间'), `
             <label class="field">
               <span class="field__label">${FOS.i18n.t('毎日の締め切り', '每日截单')}</span>
@@ -3390,6 +3458,7 @@
               <button type="button" class="btn btn--primary btn--sm" id="openAddShopBtn">＋ ${FOS.i18n.t('店舗追加', '添加店铺')}</button>
             </div>
             <div id="shopList" class="settings-list"></div>`, { asLink: true })}
+          ${settingsPanelHtml('drivers', '🚚', FOS.i18n.t('配送員管理', '配送员管理'), '', { asLink: true })}
           ${settingsPanelHtml('printer', '🖨', FOS.i18n.t('プリンター設定', '打印机设置'), '', { asLink: true })}
         </div>
       </div>
@@ -3408,17 +3477,96 @@
 
     const openSettingsPanelPage = async (panelId) => {
       if (panelId === 'payment') {
+        const pc = FOS.paycloudSettings._cache || FOS.paycloudSettings.defaults();
         FOS.ui.openModal({
           title: '',
           size: 'full',
-          bodyHtml: subPageShell(FOS.i18n.t('都度払い方法', '现结结账方式'), `
-            <div id="paymentMethodsList"></div>
-            <div class="payment-method-add">
-              <input class="field__input" id="newPaymentMethodName" placeholder="${FOS.i18n.t('例：現金、振込', '例：现金、转账')}">
-              <button type="button" class="btn btn--primary btn--sm" id="addPaymentMethodBtn">＋ ${FOS.i18n.t('追加', '添加')}</button>
+          bodyHtml: subPageShell(FOS.i18n.t('支払設定', '支付设置'), `
+            <div class="settings-printer-card">
+              <label class="settings-printer-enable-card settings-check">
+                <input type="checkbox" id="paycloudEnabled" ${pc.enabled ? 'checked' : ''}>
+                <span class="settings-printer-enable-card__label">${FOS.i18n.t('PayCloudを有効化', '启用 PayCloud')}</span>
+              </label>
+              <div class="form-grid form-grid--2">
+                <label class="settings-check">
+                  <input type="checkbox" id="paycloudWechatEnabled" ${pc.wechatEnabled !== false ? 'checked' : ''}>
+                  <span>${FOS.i18n.t('WeChat Pay', '微信支付')}</span>
+                </label>
+                <label class="settings-check">
+                  <input type="checkbox" id="paycloudAlipayEnabled" ${pc.alipayEnabled !== false ? 'checked' : ''}>
+                  <span>${FOS.i18n.t('Alipay', '支付宝')}</span>
+                </label>
+              </div>
+              <div class="form-grid form-grid--2">
+                <label class="field">
+                  <span class="field__label">merchant_no</span>
+                  <input class="field__input" id="paycloudMerchantNo" value="${FOS.fmt.escapeHtml(pc.merchantNo || '')}">
+                </label>
+                <label class="field">
+                  <span class="field__label">store_no</span>
+                  <input class="field__input" id="paycloudStoreNo" value="${FOS.fmt.escapeHtml(pc.storeNo || '')}">
+                </label>
+                <label class="field">
+                  <span class="field__label">AppID</span>
+                  <input class="field__input" id="paycloudAppId" value="${FOS.fmt.escapeHtml(pc.appId || '')}">
+                </label>
+                <label class="field">
+                  <span class="field__label">private_key_ref</span>
+                  <input class="field__input" id="paycloudPrivateKeyRef" value="${FOS.fmt.escapeHtml(pc.privateKeyRef || '')}" placeholder="aws/secrets/paycloud/...">
+                </label>
+              </div>
+              <label class="field">
+                <span class="field__label">gateway_rsa_public_key</span>
+                <textarea class="field__input" id="paycloudGatewayRsaPublicKey" rows="5" autocomplete="off">${FOS.fmt.escapeHtml(pc.gatewayRsaPublicKey || '')}</textarea>
+              </label>
+              <label class="field">
+                <span class="field__label">app_rsa_public_key</span>
+                <textarea class="field__input" id="paycloudAppRsaPublicKey" rows="4" autocomplete="off">${FOS.fmt.escapeHtml(pc.appRsaPublicKey || '')}</textarea>
+              </label>
+              <button type="button" class="btn btn--primary btn--block btn--lg" id="savePaycloudSettingsBtn">${FOS.i18n.t('PayCloud設定を保存', '保存 PayCloud 设置')}</button>
+            </div>
+            <div class="settings-printer-card">
+              <div class="settings-list-item__name" style="margin-bottom:10px">${FOS.i18n.t('都度払い方法', '现结结账方式')}</div>
+              <div id="paymentMethodsList"></div>
+              <div class="payment-method-add">
+                <input class="field__input" id="newPaymentMethodName" placeholder="${FOS.i18n.t('例：現金、振込', '例：现金、转账')}">
+                <button type="button" class="btn btn--primary btn--sm" id="addPaymentMethodBtn">＋ ${FOS.i18n.t('追加', '添加')}</button>
+              </div>
             </div>`),
         });
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('savePaycloudSettingsBtn')?.addEventListener('click', async () => {
+          const draft = FOS.paycloudSettings.normalize({
+            enabled: !!document.getElementById('paycloudEnabled')?.checked,
+            wechatEnabled: !!document.getElementById('paycloudWechatEnabled')?.checked,
+            alipayEnabled: !!document.getElementById('paycloudAlipayEnabled')?.checked,
+            merchantNo: document.getElementById('paycloudMerchantNo')?.value,
+            storeNo: document.getElementById('paycloudStoreNo')?.value,
+            appId: document.getElementById('paycloudAppId')?.value,
+            privateKeyRef: document.getElementById('paycloudPrivateKeyRef')?.value,
+            gatewayRsaPublicKey: document.getElementById('paycloudGatewayRsaPublicKey')?.value,
+            appRsaPublicKey: document.getElementById('paycloudAppRsaPublicKey')?.value,
+          });
+          if (draft.enabled) {
+            if (!draft.wechatEnabled && !draft.alipayEnabled) {
+              FOS.ui.toast(FOS.i18n.t('決済方法を1つ以上有効にしてください', '请至少启用一个支付方式'), 'error');
+              return;
+            }
+            if (!draft.merchantNo || !draft.storeNo || !draft.appId || !draft.gatewayRsaPublicKey || !draft.privateKeyRef) {
+              FOS.ui.toast(FOS.i18n.t('PayCloud必須項目を入力してください', '请填写 PayCloud 必填项目'), 'error');
+              return;
+            }
+          }
+          FOS.ui.showLoading();
+          try {
+            await FOS.paycloudSettings.save(draft);
+            FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
         await paintPaymentMethodsList();
         document.getElementById('addPaymentMethodBtn')?.addEventListener('click', async () => {
           const name = document.getElementById('newPaymentMethodName')?.value;
@@ -3489,6 +3637,7 @@
       }
       if (panelId === 'printer') {
         const ps = FOS.printerSettings._cache || FOS.printerSettings.defaults();
+        const isCloud = ps.type !== 'lan';
         FOS.ui.openModal({
           title: '',
           size: 'full',
@@ -3500,13 +3649,29 @@
               <span class="settings-printer-enable-card__label">${FOS.i18n.t('出庫印刷を有効化', '启用出库打印')}</span>
             </label>
             <div class="settings-printer-card">
-              <div class="settings-printer-types">
-                <div class="field__label">${FOS.i18n.t('プリンター種別', '打印机类型')}</div>
-                <label class="settings-radio"><input type="radio" name="printerType" value="lan" ${ps.type === 'lan' ? 'checked' : ''}> ${FOS.i18n.t('ネットワーク', '网络打印机')}</label>
-                <label class="settings-radio settings-radio--disabled"><input type="radio" name="printerType" value="usb" disabled> ${FOS.i18n.t('USB', 'USB打印机')} <span class="field__hint">${FOS.i18n.t('準備中', '即将支持')}</span></label>
-                <label class="settings-radio settings-radio--disabled"><input type="radio" name="printerType" value="bluetooth" disabled> ${FOS.i18n.t('Bluetooth', '蓝牙打印机')} <span class="field__hint">${FOS.i18n.t('準備中', '即将支持')}</span></label>
+              <label class="field">
+                <span class="field__label">${FOS.i18n.t('プリンター種別', '打印机类型')}</span>
+                <select class="field__input" id="printerType">
+                  <option value="cloud" ${isCloud ? 'selected' : ''}>${FOS.i18n.t('汉印云', '汉印云打印')}</option>
+                  <option value="lan" ${ps.type === 'lan' ? 'selected' : ''}>${FOS.i18n.t('ネットワーク(LAN)', '局域网打印机')}</option>
+                </select>
+              </label>
+              <div id="printerCloudFields" style="${isCloud ? '' : 'display:none'}">
+                <label class="field">
+                  <span class="field__label">userKey</span>
+                  <input class="field__input" id="printerUserKey" type="password" value="" placeholder="${ps.userKey ? FOS.i18n.t('保存済み', '已保存') : ''}" autocomplete="new-password">
+                </label>
+                <label class="field">
+                  <span class="field__label">userSecret</span>
+                  <input class="field__input" id="printerUserSecret" type="password" value="" placeholder="${ps.userSecret ? FOS.i18n.t('保存済み', '已保存') : ''}" autocomplete="new-password">
+                </label>
+                <label class="field">
+                  <span class="field__label">${FOS.i18n.t('プリンターSN', '打印机 SN')}</span>
+                  <input class="field__input" id="printerEquipmentSn" value="${FOS.fmt.escapeHtml(ps.equipmentSn || '')}" placeholder="设备序列号">
+                </label>
+                <button type="button" class="btn btn--secondary btn--sm" id="bindCloudPrinterBtn">${FOS.i18n.t('クラウドにバインド', '绑定到汉印云')}</button>
               </div>
-              <div class="form-grid form-grid--2" id="printerLanFields">
+              <div class="form-grid form-grid--2" id="printerLanFields" style="${ps.type === 'lan' ? '' : 'display:none'}">
                 <label class="field">
                   <span class="field__label">IP</span>
                   <input class="field__input" id="printerIp" value="${FOS.fmt.escapeHtml(ps.ip)}" placeholder="192.168.1.100">
@@ -3529,14 +3694,43 @@
             <button type="button" class="btn btn--primary btn--block btn--lg" id="savePrinterSettingsBtn">${FOS.i18n.t('保存', '保存')}</button>`
           ),
         });
+        const syncPrinterTypeFields = () => {
+          const type = document.getElementById('printerType')?.value || 'cloud';
+          const cloudEl = document.getElementById('printerCloudFields');
+          const lanEl = document.getElementById('printerLanFields');
+          if (cloudEl) cloudEl.style.display = type === 'cloud' ? '' : 'none';
+          if (lanEl) lanEl.style.display = type === 'lan' ? '' : 'none';
+        };
+        const readPrinterDraft = () => FOS.printerSettings.normalize({
+          enabled: !!document.getElementById('printerEnabled')?.checked,
+          type: document.getElementById('printerType')?.value || 'cloud',
+          ip: document.getElementById('printerIp')?.value,
+          port: document.getElementById('printerPort')?.value,
+          copies: document.getElementById('printerCopies')?.value,
+          userKey: document.getElementById('printerUserKey')?.value || ps.userKey,
+          userSecret: document.getElementById('printerUserSecret')?.value || ps.userSecret,
+          equipmentSn: document.getElementById('printerEquipmentSn')?.value,
+        });
+        document.getElementById('printerType')?.addEventListener('change', syncPrinterTypeFields);
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        document.getElementById('bindCloudPrinterBtn')?.addEventListener('click', async () => {
+          const draft = readPrinterDraft();
+          if (!draft.userKey || !draft.userSecret || !draft.equipmentSn) {
+            FOS.ui.toast(FOS.i18n.t('请先填写 userKey、userSecret 和 SN', '请先填写 userKey、userSecret 和 SN'), 'error');
+            return;
+          }
+          FOS.ui.showLoading();
+          try {
+            await FOS.hprtCloud.bindPrinter(draft);
+            FOS.ui.toast(FOS.i18n.t('绑定成功', '绑定成功'), 'success');
+          } catch (e) {
+            FOS.ui.toast(e.message, 'error');
+          } finally {
+            FOS.ui.hideLoading();
+          }
+        });
         document.getElementById('testPrinterSettingsBtn')?.addEventListener('click', async () => {
-          const enabled = !!document.getElementById('printerEnabled')?.checked;
-          const type = document.querySelector('input[name="printerType"]:checked')?.value || 'lan';
-          const ip = document.getElementById('printerIp')?.value;
-          const port = document.getElementById('printerPort')?.value;
-          const copies = document.getElementById('printerCopies')?.value;
-          const draft = FOS.printerSettings.normalize({ enabled, type, ip, port, copies });
+          const draft = readPrinterDraft();
           FOS.ui.showLoading();
           try {
             await FOS.outboundPrint.testPrint(draft);
@@ -3548,14 +3742,10 @@
           }
         });
         document.getElementById('savePrinterSettingsBtn')?.addEventListener('click', async () => {
-          const enabled = !!document.getElementById('printerEnabled')?.checked;
-          const type = document.querySelector('input[name="printerType"]:checked')?.value || 'lan';
-          const ip = document.getElementById('printerIp')?.value;
-          const port = document.getElementById('printerPort')?.value;
-          const copies = document.getElementById('printerCopies')?.value;
+          const draft = readPrinterDraft();
           FOS.ui.showLoading();
           try {
-            await FOS.printerSettings.save({ enabled, type, ip, port, copies });
+            await FOS.printerSettings.save(draft);
             FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
           } catch (e) {
             FOS.ui.toast(e.message, 'error');
@@ -3655,12 +3845,155 @@
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         paintShopList();
         document.getElementById('openAddShopBtn')?.addEventListener('click', openAddShopModal);
+        return;
+      }
+      if (panelId === 'drivers') {
+        FOS.ui.openModal({
+          title: '',
+          size: 'full',
+          bodyHtml: subPageShell(FOS.i18n.t('配送員管理', '配送员管理'), `
+            <div class="driver-mgmt-usage" id="driverUsage"></div>
+            <div class="settings-panel__toolbar">
+              <button type="button" class="btn btn--primary btn--sm" id="openAddDriverBtn">＋ ${FOS.i18n.t('配送員を追加', '添加配送员')}</button>
+            </div>
+            <div id="driverList" class="settings-list"></div>
+            <p class="field__hint">${FOS.i18n.t('配送員は配送端（/apps/production/）にログインし、割り当てられた配送のみ表示されます。', '配送员登录配送端（/apps/production/），只显示分配给自己的配送单。')}</p>`),
+        });
+        document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
+        await refreshDriverPanel();
+        document.getElementById('openAddDriverBtn')?.addEventListener('click', () => openDriverForm(null));
       }
     };
     main.querySelectorAll('[data-open-settings-panel]').forEach((btn) => {
       btn.addEventListener('click', () => openSettingsPanelPage(btn.dataset.openSettingsPanel));
     });
 
+  }
+
+  let drivers = [];
+
+  async function refreshDriverPanel() {
+    try {
+      const merchantId = FOS.merchants.scopeId();
+      const [list, limit] = await Promise.all([
+        FOS.merchants.listDrivers(merchantId),
+        FOS.merchants.driverLimit(merchantId),
+      ]);
+      drivers = list;
+      const usageEl = document.getElementById('driverUsage');
+      if (usageEl) {
+        usageEl.textContent = `${FOS.i18n.t('配送員', '配送员')} ${drivers.length} / ${limit}`;
+      }
+      const addBtn = document.getElementById('openAddDriverBtn');
+      if (addBtn) addBtn.disabled = drivers.length >= limit;
+    } catch (e) {
+      FOS.ui.toast(e.message, 'error');
+    }
+    paintDriverList();
+  }
+
+  function paintDriverList() {
+    const el = document.getElementById('driverList');
+    if (!el) return;
+    if (!drivers.length) {
+      el.innerHTML = `<div class="shop-list-empty">${FOS.i18n.t('配送員なし', '暂无配送员')}</div>`;
+      return;
+    }
+    el.innerHTML = drivers.map((d) => `
+      <div class="settings-list-item settings-list-item--row" data-driver-row="${FOS.fmt.escapeHtml(String(d.id))}">
+        <div class="settings-list-item__main">
+          <span class="settings-list-item__name">${FOS.fmt.escapeHtml(d.name || d.id)}</span>
+          <span class="settings-list-item__sub">${FOS.i18n.t('ID', '账号')}：${FOS.fmt.escapeHtml(String(d.id))}${d.phone ? ` · ${FOS.fmt.escapeHtml(d.phone)}` : ''}</span>
+        </div>
+        <div class="settings-list-item__actions">
+          <button type="button" class="btn btn--secondary btn--sm" data-edit-driver="${FOS.fmt.escapeHtml(String(d.id))}">${FOS.i18n.t('編集', '编辑')}</button>
+          <button type="button" class="btn btn--del btn--sm" data-del-driver="${FOS.fmt.escapeHtml(String(d.id))}">${FOS.i18n.t('削除', '删除')}</button>
+        </div>
+      </div>`).join('');
+
+    el.querySelectorAll('[data-edit-driver]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const d = drivers.find((x) => String(x.id) === btn.dataset.editDriver);
+        if (d) openDriverForm(d);
+      });
+    });
+    el.querySelectorAll('[data-del-driver]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const row = btn.closest('[data-driver-row]');
+        const d = drivers.find((x) => String(x.id) === btn.dataset.delDriver);
+        const ok = await confirmDangerAction({
+          title: FOS.i18n.t('確認削除', '确认删除'),
+          message: FOS.i18n.t(`「${d?.name || btn.dataset.delDriver}」を削除しますか？`, `确定删除「${d?.name || btn.dataset.delDriver}」吗？`),
+          confirmLabel: FOS.i18n.t('削除', '删除'),
+          inlineHost: row,
+        });
+        if (!ok) return;
+        FOS.ui.showLoading();
+        try {
+          await FOS.merchants.deleteDriver(btn.dataset.delDriver);
+          FOS.ui.toast(FOS.i18n.t('削除しました', '已删除'), 'success');
+          await refreshDriverPanel();
+        } catch (e) {
+          FOS.ui.toast(e.message, 'error');
+        } finally {
+          FOS.ui.hideLoading();
+        }
+      });
+    });
+  }
+
+  function openDriverForm(driver) {
+    const isCreate = !driver;
+    FOS.ui.openModal({
+      title: isCreate ? FOS.i18n.t('配送員を追加', '添加配送员') : FOS.i18n.t('配送員を編集', '编辑配送员'),
+      bodyHtml: `
+        <form id="driverForm" class="merchant-form">
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('配送員ID', '配送员账号')}</span>
+            <input class="field__input" id="dfId" value="${FOS.fmt.escapeHtml(String(driver?.id || ''))}"
+              placeholder="m001_driver2" ${isCreate ? 'required' : 'readonly'}>
+          </label>
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('氏名', '姓名')}</span>
+            <input class="field__input" id="dfName" value="${FOS.fmt.escapeHtml(driver?.name || '')}" placeholder="${FOS.i18n.t('例：田中', '例：张三')}">
+          </label>
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('電話', '电话')}</span>
+            <input class="field__input" id="dfPhone" value="${FOS.fmt.escapeHtml(driver?.phone || '')}">
+          </label>
+          <label class="field">
+            <span class="field__label">${FOS.i18n.t('パスワード', '密码')}</span>
+            <input class="field__input" type="password" id="dfPass" autocomplete="new-password"
+              placeholder="${isCreate ? FOS.i18n.t('ログイン用', '用于登录') : FOS.i18n.t('空欄なら変更しません', '留空则不修改')}" ${isCreate ? 'required' : ''}>
+          </label>
+          <div style="display:flex;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <button type="submit" class="btn btn--primary">${FOS.i18n.t('保存', '保存')}</button>
+            <button type="button" class="btn btn--secondary" data-modal-close>${FOS.i18n.t('キャンセル', '取消')}</button>
+          </div>
+        </form>`,
+    });
+    document.getElementById('driverForm')?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userId = document.getElementById('dfId')?.value;
+      const displayName = document.getElementById('dfName')?.value;
+      const phone = document.getElementById('dfPhone')?.value;
+      const password = document.getElementById('dfPass')?.value;
+      FOS.ui.showLoading();
+      try {
+        if (isCreate) {
+          await FOS.merchants.createDriver({ userId, password, displayName, phone });
+        } else {
+          await FOS.merchants.updateDriver({ userId: driver.id, displayName, phone, password });
+        }
+        FOS.ui.closeModal();
+        FOS.ui.toast(FOS.i18n.t('保存しました', '已保存'), 'success');
+        await refreshDriverPanel();
+      } catch (err) {
+        FOS.ui.toast(err.message, 'error');
+      } finally {
+        FOS.ui.hideLoading();
+      }
+    });
   }
 
   async function loadChannels() {

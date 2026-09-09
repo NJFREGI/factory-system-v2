@@ -24,7 +24,31 @@ FOS.payment = {
     { id: 'local_transfer', name: '振込', sort_order: 2 },
     { id: 'local_card', name: 'クレジット', sort_order: 3 },
     { id: 'local_paypay', name: 'PayPay', sort_order: 4 },
+    { id: 'local_wechatpay', name: '微信支付', sort_order: 5 },
+    { id: 'local_alipay', name: '支付宝', sort_order: 6 },
   ],
+
+  DIGITAL_WALLETS: [
+    { id: 'wechatpay', localId: 'local_wechatpay', payMethodId: 'WeChatPay', name: '微信支付' },
+    { id: 'alipay', localId: 'local_alipay', payMethodId: 'Alipay', name: '支付宝' },
+  ],
+
+  digitalWalletById(id) {
+    return FOS.payment.DIGITAL_WALLETS.find((wallet) => wallet.id === id) || null;
+  },
+
+  detectWalletByAuthCode(code) {
+    const digits = String(code || '').trim().replace(/\s+/g, '');
+    if (!/^\d+$/.test(digits)) return null;
+
+    if (/^(10|11|12|13|14|15)\d{16}$/.test(digits)) {
+      return FOS.payment.digitalWalletById('wechatpay');
+    }
+    if (/^(25|26|27|28|29|30)\d{14,22}$/.test(digits)) {
+      return FOS.payment.digitalWalletById('alipay');
+    }
+    return null;
+  },
 
   settlementLabel(type, lang) {
     const l = lang || FOS.i18n?.lang || 'ja';

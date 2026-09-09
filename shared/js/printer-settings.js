@@ -4,10 +4,13 @@ FOS.printerSettings = {
   defaults() {
     return {
       enabled: false,
-      type: 'lan',
+      type: 'cloud',
       ip: '',
       port: 9100,
       copies: 1,
+      userKey: '',
+      userSecret: '',
+      equipmentSn: '',
     };
   },
 
@@ -40,7 +43,7 @@ FOS.printerSettings = {
     const base = this.defaults();
     const cfg = { ...base, ...(raw || {}) };
     cfg.enabled = !!cfg.enabled;
-    cfg.type = ['lan', 'usb', 'bluetooth'].includes(cfg.type) ? cfg.type : 'lan';
+    cfg.type = ['lan', 'cloud', 'usb', 'bluetooth'].includes(cfg.type) ? cfg.type : 'cloud';
     cfg.ip = String(cfg.ip || '').trim();
     let port = parseInt(cfg.port, 10);
     if (!Number.isFinite(port) || port <= 0) port = 9100;
@@ -48,6 +51,9 @@ FOS.printerSettings = {
     let copies = parseInt(cfg.copies, 10);
     if (![1, 2, 3].includes(copies)) copies = 1;
     cfg.copies = copies;
+    cfg.userKey = String(cfg.userKey || '').trim();
+    cfg.userSecret = String(cfg.userSecret || '').trim();
+    cfg.equipmentSn = String(cfg.equipmentSn || cfg.equipment_sn || '').trim();
     return cfg;
   },
 
@@ -74,8 +80,22 @@ FOS.printerSettings = {
     return !!c.enabled && c.type === 'lan' && !!c.ip;
   },
 
+  isCloudReady(cfg) {
+    const c = cfg || this._cache || this.defaults();
+    return !!c.enabled && c.type === 'cloud' && !!c.userKey && !!c.userSecret && !!c.equipmentSn;
+  },
+
+  isReady(cfg) {
+    const c = cfg || this._cache || this.defaults();
+    if (!c.enabled) return false;
+    if (c.type === 'cloud') return FOS.printerSettings.isCloudReady(c);
+    if (c.type === 'lan') return FOS.printerSettings.isLanReady(c);
+    return false;
+  },
+
   deviceLabel(cfg) {
     const c = cfg || this._cache || this.defaults();
+    if (c.type === 'cloud') return `Cloud ${c.equipmentSn || '—'}`;
     if (c.type === 'lan') return `LAN ${c.ip}:${c.port || 9100}`;
     if (c.type === 'usb') return 'USB';
     if (c.type === 'bluetooth') return FOS.i18n.t('Bluetooth', '蓝牙');
