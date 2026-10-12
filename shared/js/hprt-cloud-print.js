@@ -8,7 +8,7 @@ FOS.hprtCloudPrint = {
   LINE_WIDTH: 46,
 
   escape(text) {
-    return String(text ?? '')
+    return FOS.escpos.printableText(text)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');

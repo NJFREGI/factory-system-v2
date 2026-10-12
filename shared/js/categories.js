@@ -61,17 +61,17 @@ FOS.categories = {
 
   getTree(fromProducts) {
     let tree = FOS.storage.get(FOS.categories._storageKey());
-    if (!tree?.length) {
+    // A saved empty array means the user deliberately removed all categories.
+    if (!Array.isArray(tree)) {
       const legacy = FOS.storage.get('categories');
-      const flat = legacy?.length ? legacy : FOS.categories.DEFAULTS;
+      const flat = Array.isArray(legacy) ? legacy : FOS.categories.DEFAULTS;
       tree = FOS.categories._migrateFlat(flat);
       FOS.categories.setTree(tree);
     }
     const raw = JSON.stringify(tree);
     tree = FOS.categories._normalizeTree(tree);
     if (JSON.stringify(tree) !== raw) FOS.categories.setTree(tree);
-    FOS.categories.mergeFromProducts(tree, fromProducts);
-    return tree;
+    return FOS.categories.mergeFromProducts(tree, fromProducts);
   },
 
   setTree(tree) {

@@ -46,8 +46,18 @@ FOS.escpos = {
     return out;
   },
 
+  // GBK printer fonts lack halfwidth kana and U+00A5. Normalize before
+  // measuring/wrapping; normalize whole kana runs so voiced marks stay attached.
+  printableText(text) {
+    return String(text ?? '')
+      .replace(/[\uFF61-\uFF9F]+/g, (run) => run.normalize('NFKC'))
+      .replace(/\u3099/g, '\u309B')
+      .replace(/\u309A/g, '\u309C')
+      .replace(/\u00A5/g, '\uFFE5');
+  },
+
   textBytes(text) {
-    const str = String(text ?? '');
+    const str = FOS.escpos.printableText(text);
     if (window.NjfAndroid?.textToGbkBase64) {
       return FOS.escpos.bytesFromBase64(window.NjfAndroid.textToGbkBase64(str));
     }
@@ -98,7 +108,7 @@ FOS.escpos = {
 
   displayWidth(str) {
     let w = 0;
-    for (const ch of String(str || '')) {
+    for (const ch of FOS.escpos.printableText(str)) {
       const code = ch.codePointAt(0) || 0;
       w += code > 0xff ? 2 : 1;
     }
@@ -107,7 +117,7 @@ FOS.escpos = {
 
   wrapDisplayWidth(str, maxWidth) {
     const max = Math.max(4, maxWidth | 0);
-    const text = String(str || '');
+    const text = FOS.escpos.printableText(str);
     if (!text) return [''];
     const lines = [];
     let cur = '';
@@ -129,8 +139,8 @@ FOS.escpos = {
 
   padTwoCol(left, right, lineWidth) {
     const lw = lineWidth || FOS.escpos.LINE_WIDTH;
-    const l = String(left ?? '');
-    const r = String(right ?? '');
+    const l = FOS.escpos.printableText(left);
+    const r = FOS.escpos.printableText(right);
     const gap = Math.max(1, lw - FOS.escpos.displayWidth(l) - FOS.escpos.displayWidth(r));
     return l + ' '.repeat(gap) + r;
   },
@@ -300,7 +310,7 @@ FOS.escpos = {
 
   money(value) {
     const n = Number(value) || 0;
-    return `¥${Math.round(n).toLocaleString('ja-JP')}`;
+    return `￥${Math.round(n).toLocaleString('ja-JP')}`;
   },
 
   itemLineAmount(item) {

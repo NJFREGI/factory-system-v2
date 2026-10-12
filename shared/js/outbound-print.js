@@ -47,6 +47,14 @@ FOS.outboundPrint = {
     throw new Error(FOS.i18n.t('LAN印刷はアプリからご利用ください', '请在管理端 APP 中使用 LAN 打印'));
   },
 
+  async sendBluetooth(payload, cfg) {
+    if (!FOS.printerSettings.validBluetoothAddress(cfg.bluetoothAddress)) throw new Error(FOS.i18n.t('プリンターを選択してください', '请选择蓝牙打印机'));
+    if (!FOS.native?.bluetoothPrintRaw) throw new Error(FOS.i18n.t('Bluetooth印刷は新版Androidアプリでご利用ください', '请在支持蓝牙打印的新版安卓 APP 中使用'));
+    const result = await FOS.native.bluetoothPrintRaw(cfg.bluetoothAddress, payload.base64);
+    if (!result?.ok) throw new Error(result?.error || FOS.i18n.t('Bluetooth送信失敗', '蓝牙发送失败'));
+    return true;
+  },
+
   async sendCloud(payload, cfg) {
     if (!FOS.hprtCloud?.sendPrintTask) {
       throw new Error(FOS.i18n.t('汉印云模块未加载', '汉印云模块未加载'));
@@ -70,7 +78,8 @@ FOS.outboundPrint = {
       return true;
     }
 
-    const host = String(settings.ip || '').trim();
+    if (!['lan', 'bluetooth'].includes(settings.type)) throw new Error('不支持的打印机类型');
+    const host = settings.type === 'bluetooth' ? settings.bluetoothAddress : String(settings.ip || '').trim();
     if (!host) throw new Error(FOS.i18n.t('プリンターIP未設定', '未配置打印机 IP'));
 
     const now = new Date();
@@ -85,7 +94,7 @@ FOS.outboundPrint = {
       FOS.escpos.feed(2),
       FOS.escpos.cut()
     );
-    await FOS.outboundPrint.sendLan({ base64: FOS.escpos.bytesToBase64(bytes) }, settings);
+    await FOS.outboundPrint[settings.type === 'bluetooth' ? 'sendBluetooth' : 'sendLan']({ base64: FOS.escpos.bytesToBase64(bytes) }, settings);
     return true;
   },
 
@@ -112,10 +121,10 @@ FOS.outboundPrint = {
         for (let i = 0; i < count; i++) {
           await FOS.outboundPrint.sendCloud({ content: payload.content, orderNo }, cfg);
         }
-      } else if (cfg.type === 'lan') {
+      } else if (cfg.type === 'lan' || cfg.type === 'bluetooth') {
         const payload = await FOS.escpos.buildOutboundPayload(order);
         for (let i = 0; i < count; i++) {
-          await FOS.outboundPrint.sendLan(payload, cfg);
+          await FOS.outboundPrint[cfg.type === 'bluetooth' ? 'sendBluetooth' : 'sendLan'](payload, cfg);
         }
       } else {
         return {
