@@ -60,7 +60,13 @@ FOS.invoiceSettings = {
     const current = await FOS.merchants.getById(mid);
     const patch = FOS.invoiceSettings.toMerchantPatch(profile);
     try {
-      await FOS.merchants.update(mid, { ...current, ...patch });
+      if (FOS.merchants.isSuperAdmin(FOS.auth?.user)) {
+        await FOS.merchants.update(mid, { ...current, ...patch });
+      } else {
+        // 工厂端只能改请求书信息；套餐、配额等字段由总后台管理
+        const { error } = await FOS.db.sb.rpc('fos_set_merchant_invoice_profile', { p: patch });
+        if (error) throw new Error(error.message);
+      }
     } catch (e) {
       if (!/invoice_|column|schema cache|42703|PGRST204/i.test(e.message || '')) throw e;
       await FOS.db.sb.from('settings').upsert({

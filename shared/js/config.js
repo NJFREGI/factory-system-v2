@@ -11,6 +11,12 @@ FOS.CONFIG = {
   STORAGE_PREFIX: 'fos_v2_',
   DEFAULT_CUTOFF: '17:00',
 
+  /**
+   * 员工账号 ID → Supabase Auth 内部邮箱的域名（不收发邮件）。
+   * 必须与数据库函数 public.fos_login_email() 中的域名一致。
+   */
+  LOGIN_EMAIL_DOMAIN: 'login.njfregi.jp',
+
   /** SaaS 默认商家 ID（历史数据迁移目标） */
   DEFAULT_MERCHANT_ID: 'default',
 

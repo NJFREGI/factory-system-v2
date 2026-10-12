@@ -1098,6 +1098,7 @@
       FOS.ui.showLoading();
       try {
         await FOS.orders.saveEdit(orderId, {
+          expected_updated_at: order.updated_at,
           status: document.getElementById('editStatus').value,
           factoryNote: document.getElementById('editFactoryNote').value,
           items: editItems,
@@ -2956,7 +2957,7 @@
     });
   }
 
-  const SHOP_USER_FIELDS = 'id, name, password_hash, address, zip_code, phone, contact_name, settlement_type';
+  const SHOP_USER_FIELDS = 'id, name, address, zip_code, phone, contact_name, settlement_type';
 
   function settlementTypeFieldHtml(prefix, value) {
     const v = value || FOS.payment.SETTLEMENT.MONTHLY;
@@ -3271,7 +3272,6 @@
   async function updateShopUser(id, payload) {
     const base = {
       name: payload.name,
-      password_hash: payload.password_hash,
       address: payload.address ?? '',
       zip_code: payload.zip_code ?? '',
     };
@@ -3308,31 +3308,6 @@
     return { ok: false, error: lastError };
   }
 
-  async function upsertShopUser(payload) {
-    const attempts = [
-      payload,
-      (() => { const p = { ...payload }; delete p.contact_name; delete p.phone; return p; })(),
-      (() => { const p = { ...payload }; delete p.settlement_type; delete p.contact_name; delete p.phone; return p; })(),
-    ];
-    const seen = new Set();
-    let lastError = null;
-    for (const row of attempts) {
-      const key = JSON.stringify(row);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const { error } = await FOS.db.sb.from('users').upsert(row);
-      if (!error) {
-        return {
-          ok: true,
-          settlementInDb: Object.prototype.hasOwnProperty.call(row, 'settlement_type'),
-        };
-      }
-      lastError = error;
-      if (!isUserColumnError(error)) break;
-    }
-    return { ok: false, error: lastError };
-  }
-
   async function loadShops() {
     let { data, error } = await FOS.merchants.scopeFilter(
       FOS.db.sb.from('users').select(SHOP_USER_FIELDS)
@@ -3340,7 +3315,7 @@
     );
     if (error && /contact_name|phone|settlement_type|column/i.test(error.message || '')) {
       ({ data } = await FOS.merchants.scopeFilter(
-        FOS.db.sb.from('users').select('id, name, password_hash, address')
+        FOS.db.sb.from('users').select('id, name, address')
           .eq('role', 'order').eq('active', true)
       ));
     }
@@ -3637,7 +3612,7 @@
       }
       if (panelId === 'printer') {
         const ps = FOS.printerSettings._cache || FOS.printerSettings.defaults();
-        const isCloud = ps.type !== 'lan';
+        const isCloud = ps.type === 'cloud';
         FOS.ui.openModal({
           title: '',
           size: 'full',
@@ -3654,8 +3629,14 @@
                 <select class="field__input" id="printerType">
                   <option value="cloud" ${isCloud ? 'selected' : ''}>${FOS.i18n.t('汉印云', '汉印云打印')}</option>
                   <option value="lan" ${ps.type === 'lan' ? 'selected' : ''}>${FOS.i18n.t('ネットワーク(LAN)', '局域网打印机')}</option>
+                  <option value="bluetooth" ${ps.type === 'bluetooth' ? 'selected' : ''}>${FOS.i18n.t('Bluetooth（この端末）', '蓝牙打印（本机）')}</option>
                 </select>
               </label>
+              <div id="printerBluetoothFields" style="${ps.type === 'bluetooth' ? '' : 'display:none'}">
+                <p>${FOS.i18n.t('この端末のペアリング済みプリンターを設定します。', '选择本机已配对的汉印打印机，不影响其他设备的云打印设置。')}</p>
+                <p>${FOS.fmt.escapeHtml(ps.bluetoothName || ps.bluetoothAddress || '')}</p>
+                <button type="button" class="btn btn--secondary" id="configureBluetoothBtn">${FOS.i18n.t('Bluetoothプリンターを設定', '选择 / 配置蓝牙打印机')}</button>
+              </div>
               <div id="printerCloudFields" style="${isCloud ? '' : 'display:none'}">
                 <label class="field">
                   <span class="field__label">userKey</span>
@@ -3700,6 +3681,7 @@
           const lanEl = document.getElementById('printerLanFields');
           if (cloudEl) cloudEl.style.display = type === 'cloud' ? '' : 'none';
           if (lanEl) lanEl.style.display = type === 'lan' ? '' : 'none';
+          document.getElementById('printerBluetoothFields').style.display = type === 'bluetooth' ? '' : 'none';
         };
         const readPrinterDraft = () => FOS.printerSettings.normalize({
           enabled: !!document.getElementById('printerEnabled')?.checked,
@@ -3710,8 +3692,14 @@
           userKey: document.getElementById('printerUserKey')?.value || ps.userKey,
           userSecret: document.getElementById('printerUserSecret')?.value || ps.userSecret,
           equipmentSn: document.getElementById('printerEquipmentSn')?.value,
+          bluetoothAddress: ps.bluetoothAddress,
+          bluetoothName: ps.bluetoothName,
         });
         document.getElementById('printerType')?.addEventListener('change', syncPrinterTypeFields);
+        document.getElementById('configureBluetoothBtn')?.addEventListener('click', async () => {
+          try { await FOS.printerSettings.configureBluetooth(); }
+          catch (e) { FOS.ui.toast(e.message, 'error'); }
+        });
         document.getElementById('settingsSubBack')?.addEventListener('click', () => FOS.ui.closeModal());
         document.getElementById('bindCloudPrinterBtn')?.addEventListener('click', async () => {
           const draft = readPrinterDraft();
@@ -4364,7 +4352,7 @@
               <label class="field"><span class="field__label">${FOS.i18n.t('店舗名', '店名')}</span>
                 <input class="field__input" id="editShopName_${u.id}" value="${FOS.fmt.escapeHtml(u.name)}"></label>
               <label class="field"><span class="field__label">${FOS.i18n.t('パスワード', '密码')}</span>
-                <input class="field__input" id="editShopPass_${u.id}" value="${FOS.fmt.escapeHtml(u.password_hash)}"></label>
+                <input class="field__input" id="editShopPass_${u.id}" type="password" value="" autocomplete="new-password" placeholder="${FOS.i18n.t('変更する場合のみ入力', '不修改请留空')}"></label>
             </div>
             <div class="form-grid form-grid--2">
               <label class="field"><span class="field__label">${FOS.i18n.t('担当者', '联系人')} <span class="field__opt">${FOS.i18n.t('任意', '选填')}</span></span>
@@ -4471,10 +4459,17 @@
     const contact = document.getElementById('editShopContact_' + id)?.value;
     const phone = document.getElementById('editShopPhone_' + id)?.value;
     const settlementType = readSettlementType('editShop_' + id);
-    if (!name || !pass) { FOS.ui.toast(FOS.i18n.t('入力してください', '请填写完整'), 'error'); return; }
+    if (!name) { FOS.ui.toast(FOS.i18n.t('入力してください', '请填写完整'), 'error'); return; }
+    if (pass) {
+      try {
+        await FOS.merchants.setPassword(id, pass);
+      } catch (err) {
+        FOS.ui.toast(err.message, 'error');
+        return;
+      }
+    }
     const result = await updateShopUser(id, {
       name,
-      password_hash: pass,
       address: addr,
       zip_code: zip,
       settlement_type: settlementType,
@@ -4507,9 +4502,12 @@
       inlineHost,
     });
     if (!ok) return;
-    await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('users').update({ active: false }).eq('id', id)
-    );
+    try {
+      await FOS.merchants.setAccountActive(id, false);
+    } catch (err) {
+      FOS.ui.toast(err.message, 'error');
+      return;
+    }
     FOS.ui.toast(FOS.i18n.t('削除しました', '已删除'), 'success');
     await loadShops();
     paintShopList();
@@ -4529,24 +4527,22 @@
     }
     FOS.ui.showLoading();
     try {
-      const { data: exists } = await FOS.db.sb.from('users').select('id, active').eq('id', id).maybeSingle();
-      if (!exists?.active) await FOS.merchants.assertCanAddUser();
       const settlementType = readSettlementType('newShop');
-      const result = await upsertShopUser({
+      const optional = shopOptionalFields(contact, phone);
+      // 新建或复活门店账号：权限、商家归属、套餐上限、密码哈希都由数据库 RPC 处理
+      await FOS.merchants.saveAccount({
         id,
         name,
         role: 'order',
-        password_hash: pass,
+        password: pass,
         address: addr,
         zip_code: zip,
-        active: true,
-        merchant_id: FOS.merchants.scopeId(),
         settlement_type: settlementType,
-        ...shopOptionalFields(contact, phone),
+        contact_name: optional.contact_name || '',
+        phone: optional.phone || '',
+        create: true,
       });
-      if (!result.ok) throw result.error;
-      if (result.settlementInDb) FOS.payment.clearShopSettlementOverride(id);
-      else FOS.payment.setShopSettlement(id, settlementType);
+      FOS.payment.clearShopSettlementOverride(id);
       FOS.ui.toast(FOS.i18n.t('追加しました', '已添加'), 'success');
       await renderSettings();
       return true;

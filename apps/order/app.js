@@ -75,14 +75,9 @@
 
   async function resolveShopDisplayName(shopId) {
     if (!shopId) return '';
-    const { data } = await FOS.db.sb
-      .from('users')
-      .select('name')
-      .eq('id', shopId)
-      .eq('role', 'order')
-      .eq('active', true)
-      .maybeSingle();
-    if (data?.name) return FOS.fmt.displayName(data.name);
+    // 登录前无权读取 users 表：通过只返回店名的 RPC 查询
+    const { data } = await FOS.db.sb.rpc('fos_shop_display_name', { p_shop_id: shopId });
+    if (data) return FOS.fmt.displayName(data);
     return shopId;
   }
 
@@ -91,6 +86,7 @@
   }
 
   async function startApp() {
+    await FOS.cutoff.load(); // 登录后按本商家重新读取截单时间
     await FOS.orderSettings.load();
     const displayName = shopTopbarTitle();
     FOS.shell.mount({
@@ -921,69 +917,27 @@
     });
   }
 
+  let orderSubmitting = false;
   async function submitOrder() {
+    if (orderSubmitting) return;
     const c = getCart();
     if (!c.length) { FOS.ui.toast(FOS.i18n.t('カートが空', '购物车为空'), 'error'); return; }
+    orderSubmitting = true;
+    FOS.ui.showLoading(FOS.i18n.t('送信中...', '提交中...'));
     try {
       await FOS.merchants.assertCanOrder();
-    } catch (err) {
-      FOS.ui.toast(err.message, 'error');
-      return;
-    }
-    const { data: unconf } = await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('orders').select('id').eq('shop_id', FOS.auth.user.id)
-        .eq('status', 'delivered').eq('receipt_confirmed', false).limit(1)
-    );
-    if (unconf?.length) { FOS.ui.toast(FOS.i18n.t('受取確認が必要', '请先确认收货'), 'error'); return; }
-
-    FOS.ui.showLoading(FOS.i18n.t('送信中...', '提交中...'));
-    const oDate = FOS.cutoff.getOrderDate();
-    const sheetOpen = document.getElementById('cartSheet')?.classList.contains('open');
-    const note = (sheetOpen ? document.getElementById('orderNoteSheet') : document.getElementById('orderNote'))?.value?.trim() || '';
-
-    try {
-      const existing = await FOS.orders.findOpenOrder(FOS.auth.user.id, oDate);
-
-      const confirmOrder = (orderId) => async () => {
-        await FOS.orders.confirmShopSubmission(orderId);
-      };
-
-      if (existing) {
-        const orderId = existing.id;
-        await FOS.orders.markShopUnconfirmed(orderId);
-        if (note) {
-          const { data: ex } = await FOS.merchants.scopeFilter(
-            FOS.db.sb.from('orders').select('note').eq('id', orderId)
-          ).single();
-          await FOS.merchants.scopeFilter(
-            FOS.db.sb.from('orders').update({ note: [ex?.note, note].filter(Boolean).join('\n'), updated_at: new Date().toISOString() }).eq('id', orderId)
-          );
-        }
-        await FOS.orders.appendItems(orderId, c);
-        await FOS.orders.deductStock(c, allProducts);
-        const t = await FOS.orders.recalc(orderId);
-        FOS.ui.showOrderSuccess({ orderNo: existing.order_no, total: t.total, merged: true, onConfirm: confirmOrder(orderId) });
-      } else {
-        const { data: newOrder, error } = await FOS.db.sb.from('orders')
-          .insert({
-            shop_id: FOS.auth.user.id,
-            shop_name: FOS.auth.user.name,
-            order_date: oDate,
-            note,
-            merchant_id: FOS.merchants.scopeId(),
-          }).select().single();
-        if (error) throw error;
-        await FOS.db.sb.from('order_items').insert(c.map((item) => ({ order_id: newOrder.id, ...FOS.orders.itemPayload(item) })));
-        await FOS.orders.deductStock(c, allProducts);
-        const t = await FOS.orders.recalc(newOrder.id);
-        FOS.ui.showOrderSuccess({ orderNo: newOrder.order_no, total: t.total, onConfirm: confirmOrder(newOrder.id) });
-      }
+      const sheetOpen = document.getElementById('cartSheet')?.classList.contains('open');
+      const note = (sheetOpen ? document.getElementById('orderNoteSheet') : document.getElementById('orderNote'))?.value?.trim() || '';
+      const result = await FOS.orders.submit(c, FOS.cutoff.getOrderDate(), note);
       setCart([]);
       closeCartSheet();
+      FOS.ui.showOrderSuccess({orderNo: result.order_no, total: result.total, merged: result.merged,
+        onConfirm: () => FOS.orders.confirmShopSubmission(result.id)});
       await renderShop();
     } catch (e) {
       FOS.ui.toast(e.message, 'error');
     } finally {
+      orderSubmitting = false;
       FOS.ui.hideLoading();
     }
   }

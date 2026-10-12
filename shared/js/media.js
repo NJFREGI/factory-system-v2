@@ -39,7 +39,10 @@ FOS.media = {
       throw new Error(FOS.i18n.t('5MB以内', '请小于 5MB'));
     }
     const ext = FOS.media.fileExt(file);
-    const name = `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+    // 图片按商家目录保存：数据库策略只允许写入本商家目录
+    const mid = FOS.merchants?.scopeId?.();
+    const base = `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+    const name = mid ? `${mid}/${base}` : base;
     const contentType = file.type || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
     const { error } = await FOS.db.sb.storage.from('products').upload(name, file, {
       cacheControl: '3600',

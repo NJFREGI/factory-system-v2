@@ -1,6 +1,46 @@
 window.FOS = window.FOS || {};
 
 FOS.orders = {
+  async checked(query, requireRow = false) {
+    const { data, error } = await query;
+    if (error) throw new Error(error.message || '数据库操作失败');
+    if (requireRow && (!data || (Array.isArray(data) && !data.length))) {
+      throw new Error('数据未保存：记录不存在或无权限');
+    }
+    return data;
+  },
+
+  async mutate(operation, payload = {}) {
+    const user = FOS.auth.user;
+    if (!user?.id) throw new Error('请重新登录');
+    const key = 'order_request_' + user.id + '_' + operation + '_' + (payload.order_id || 'cart');
+    const fingerprint = JSON.stringify(payload);
+    let pending = FOS.storage.get(key);
+    if (pending && pending.fingerprint !== fingerprint) {
+      throw new Error('上一次操作结果尚未确认，请先恢复原操作内容并重试，避免重复下单');
+    }
+    if (!pending) {
+      pending = { fingerprint, id: crypto.randomUUID() };
+      FOS.storage.set(key, pending);
+    }
+    const { data, error } = await FOS.db.sb.rpc('fos_mutate_order', {
+      // 操作者由数据库根据 Supabase Auth 会话识别，不再传账号和密码
+      p_payload: { ...payload, operation, request_id: pending.id },
+    });
+    if (error) {
+      // Explicit database errors mean rollback; transport errors have an unknown commit outcome.
+      if (error.code && error.code !== 'PGRST002' && error.code !== 'PGRST000') FOS.storage.set(key, null);
+      throw new Error(error.code === 'PGRST202' ? '订单功能升级尚未完成，请联系管理员' : (error.message || '网络异常，请重试同一操作'));
+    }
+    if (!data?.id) throw new Error('订单操作结果不完整，请重试');
+    FOS.storage.set(key, null);
+    return data;
+  },
+
+  async submit(items, orderDate, note) {
+    return FOS.orders.mutate('submit', {items: items.map(i => ({product_id: i.product_id, qty: i.qty})), order_date: orderDate, note});
+  },
+
   hasSubmittedAtField(order) {
     return !!order && Object.prototype.hasOwnProperty.call(order, 'shop_submitted_at');
   },
@@ -21,39 +61,8 @@ FOS.orders = {
     return FOS.merchants.scopeFilter(query).not('shop_submitted_at', 'is', null);
   },
 
-  async markShopUnconfirmed(orderId) {
-    const payload = {
-      shop_submitted_at: null,
-      updated_at: new Date().toISOString(),
-    };
-    if (FOS.auth.user?.role === 'order') {
-      await FOS.db.sb.from('orders').update(payload).eq('id', orderId).eq('shop_id', FOS.auth.user.id);
-      return;
-    }
-    await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('orders').update(payload).eq('id', orderId)
-    );
-  },
-
   async confirmShopSubmission(orderId) {
-    const ts = new Date().toISOString();
-    const payload = { shop_submitted_at: ts, updated_at: ts };
-    const select = 'id, shop_submitted_at, order_no, order_date, total, shop_name, shop_id, merchant_id';
-    let result;
-    if (FOS.auth.user?.role === 'order') {
-      result = await FOS.db.sb.from('orders').update(payload).eq('id', orderId).eq('shop_id', FOS.auth.user.id)
-        .select(select).maybeSingle();
-    } else {
-      result = await FOS.merchants.scopeFilter(
-        FOS.db.sb.from('orders').update(payload).eq('id', orderId)
-      ).select(select).maybeSingle();
-    }
-    const { data, error } = result;
-    if (error) throw error;
-    if (!data?.shop_submitted_at) {
-      throw new Error(FOS.i18n.t('注文の確定に失敗しました', '订单确认失败，请重试'));
-    }
-    return data;
+    return FOS.orders.mutate('confirm', {order_id: orderId});
   },
 
   itemPayload(item) {
@@ -114,30 +123,6 @@ FOS.orders = {
     </label>`;
   },
 
-  async _updateOrderItem(id, patch) {
-    const tryPatch = { ...patch };
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const { error } = await FOS.db.sb.from('order_items').update(tryPatch).eq('id', id);
-      if (!error) return;
-      const msg = error.message || '';
-      if (/admin_edit/.test(msg) && Object.prototype.hasOwnProperty.call(tryPatch, 'admin_edit')) {
-        delete tryPatch.admin_edit;
-        continue;
-      }
-      if (/shortage_qty/.test(msg) && Object.prototype.hasOwnProperty.call(tryPatch, 'shortage_qty')) {
-        if (tryPatch.shortage_qty > 0 && tryPatch.shortage_qty < tryPatch.qty) {
-          throw new Error(FOS.i18n.t(
-            '部分欠品には schema-order-item-admin-edit.sql の実行が必要です',
-            '部分缺货需先在 Supabase 执行 schema-order-item-admin-edit.sql'
-          ));
-        }
-        delete tryPatch.shortage_qty;
-        continue;
-      }
-      throw error;
-    }
-  },
-
   adminEditLabel(edit) {
     if (edit === 'added') return FOS.i18n.t('管理追加', '后台添加');
     if (edit === 'modified') return FOS.i18n.t('管理変更', '后台修改');
@@ -184,90 +169,17 @@ FOS.orders = {
   },
 
   async recalc(orderId) {
-    const { data: items } = await FOS.db.sb
-      .from('order_items')
-      .select('*')
-      .eq('order_id', orderId);
-    let sub = 0;
-    let tax = 0;
-    (items || []).forEach((i) => {
-      const billQty = FOS.orders.deliveredQty(i);
-      const lp = i.unit_price * billQty;
-      sub += lp;
-      tax += Math.round((lp * i.tax_rate) / 100);
-    });
-    await FOS.db.sb
-      .from('orders')
-      .update({
-        subtotal: sub,
-        tax_total: tax,
-        total: sub + tax,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId);
-    return { sub, tax, total: sub + tax };
+    return FOS.orders.mutate('recalc', {order_id: orderId});
   },
 
   async fetchOne(orderId) {
-    const { data } = await FOS.db.sb
-      .from('orders')
-      .select('*, order_items(*)')
-      .eq('id', orderId)
-      .single();
-    return data;
+    return FOS.orders.checked(FOS.db.sb.from('orders').select('*, order_items(*)').eq('id', orderId).single(), true);
   },
 
   async fetchOneForFactory(orderId) {
-    const { data } = await FOS.orders.forFactoryQuery(
-      FOS.db.sb.from('orders').select('*, order_items(*)').eq('id', orderId).maybeSingle()
-    );
-    return data;
-  },
-
-  async findOpenOrder(shopId, orderDate) {
-    const { data } = await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('orders').select('id, order_no')
-        .eq('shop_id', shopId)
-        .eq('order_date', orderDate)
-        .in('status', ['pending', 'preparing'])
-        .order('created_at', { ascending: true })
-        .limit(1)
-    );
-    return data?.[0] || null;
-  },
-
-  async deductStock(cartItems, products) {
-    for (const item of cartItems || []) {
-      const p = (products || []).find((x) => String(x.id) === String(item.product_id));
-      if (!p) continue;
-      const ns = Math.max(0, p.stock - item.qty);
-      await FOS.merchants.scopeFilter(
-        FOS.db.sb.from('products').update({ stock: ns, updated_at: new Date().toISOString() }).eq('id', p.id)
-      );
-      p.stock = ns;
-    }
-  },
-
-  async appendItems(orderId, cartItems, { adminSource = false } = {}) {
-    const { data: existingItems } = await FOS.db.sb.from('order_items').select('*').eq('order_id', orderId);
-    for (const item of cartItems || []) {
-      const ex = (existingItems || []).find((e) => String(e.product_id) === String(item.product_id));
-      if (ex) {
-        const adminEdit = adminSource
-          ? (ex.admin_edit === 'added' ? 'added' : 'modified')
-          : ex.admin_edit;
-        await FOS.db.sb.from('order_items').update({
-          qty: ex.qty + item.qty,
-          ...(adminEdit ? { admin_edit: adminEdit } : {}),
-        }).eq('id', ex.id);
-        ex.qty += item.qty;
-        if (adminEdit) ex.admin_edit = adminEdit;
-      } else {
-        const row = { order_id: orderId, ...FOS.orders.itemPayload(item) };
-        if (adminSource) row.admin_edit = 'added';
-        await FOS.db.sb.from('order_items').insert(row);
-      }
-    }
+    return FOS.orders.checked(FOS.orders.forFactoryQuery(
+      FOS.db.sb.from('orders').select('*, order_items(*)').eq('id', orderId)
+    ).maybeSingle(), true);
   },
 
   mergeItemMap(itemMap, items) {
@@ -412,83 +324,16 @@ FOS.orders = {
   },
 
   async updateStatus(orderId, status) {
-    const { data: order } = await FOS.db.sb
-      .from('orders')
-      .select('order_source')
-      .eq('id', orderId)
-      .maybeSingle();
-    const payload = { status, updated_at: new Date().toISOString() };
-    const deliveryMap = {
-      pending: 'new',
-      preparing: 'accepted',
-      shipped: 'delivering',
-      delivered: 'delivered',
-      cancelled: 'cancelled',
-    };
-    if (order && FOS.publicOrder?.isPublicOrder(order) && deliveryMap[status]) {
-      payload.delivery_status = deliveryMap[status];
-    }
-    await FOS.db.sb.from('orders').update(payload).eq('id', orderId);
+    await FOS.orders.mutate('status', {order_id: orderId, status});
     FOS.realtime?.suppressOrderAlert?.(orderId);
   },
 
   async confirmReceipt(orderId) {
-    await FOS.db.sb
-      .from('orders')
-      .update({
-        receipt_confirmed: true,
-        receipt_confirmed_at: new Date().toISOString(),
-        status: 'confirmed',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId);
+    return FOS.orders.mutate('receipt', {order_id: orderId});
   },
 
-  async saveEdit(orderId, { status, factoryNote, items, addItems }) {
-    await FOS.db.sb
-      .from('orders')
-      .update({
-        status,
-        factory_note: factoryNote || '',
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', orderId);
-
-    const { data: existingItems } = await FOS.db.sb
-      .from('order_items')
-      .select('id, qty, admin_edit')
-      .eq('order_id', orderId);
-    const existingMap = Object.fromEntries((existingItems || []).map((e) => [e.id, e]));
-
-    for (const item of items || []) {
-      if (!item.id) continue;
-      const qty = parseInt(item.qty, 10);
-      if (item.remove || !Number.isFinite(qty) || qty <= 0) {
-        const { error } = await FOS.db.sb.from('order_items').delete().eq('id', item.id);
-        if (error) throw error;
-        continue;
-      }
-      const orig = existingMap[item.id];
-      let adminEdit = orig?.admin_edit || null;
-      if (adminEdit !== 'added' && orig && qty !== orig.qty) adminEdit = 'modified';
-      const shortageQty = FOS.orders.parseEditShortageQty(item.shortageQty, qty);
-      if (shortageQty > 0 && shortageQty < qty && adminEdit !== 'modified' && orig && shortageQty !== FOS.orders.shortageQty(orig)) {
-        if (adminEdit !== 'added') adminEdit = 'modified';
-      }
-      await FOS.orders._updateOrderItem(item.id, {
-        qty,
-        shortage: shortageQty > 0,
-        shortage_qty: shortageQty,
-        shortage_note: item.shortageNote || '',
-        admin_edit: adminEdit,
-      });
-    }
-
-    if (addItems?.length) {
-      await FOS.orders.appendItems(orderId, addItems, { adminSource: true });
-    }
-
-    return FOS.orders.recalc(orderId);
+  async saveEdit(orderId, edit) {
+    return FOS.orders.mutate('edit', {order_id: orderId, ...edit});
   },
 
   orderItemUnitPrice(product, order) {

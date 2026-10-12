@@ -1,0 +1,1 @@
+{"private": true, "type": "module", "scripts": {"test": "node --test orders.test.cjs auth.test.cjs categories.test.cjs && node order-transaction.test.mjs", "test:security": "node security/security.test.mjs"}, "devDependencies": {"@electric-sql/pglite": "0.3.14", "bcryptjs": "2.4.3", "pg": "8.13.1"}}

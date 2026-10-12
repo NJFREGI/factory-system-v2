@@ -216,7 +216,13 @@ FOS.publicOrder = {
   },
 
   loadCustomerSession(merchantId) {
-    return FOS.storage.get(FOS.publicOrder.customerSessionKey(merchantId));
+    const session = FOS.storage.get(FOS.publicOrder.customerSessionKey(merchantId));
+    // 旧版本只保存手机号（无令牌）：需要重新登录
+    if (session && !session.session_token) {
+      FOS.publicOrder.clearCustomerSession(merchantId);
+      return null;
+    }
+    return session;
   },
 
   saveCustomerSession(merchantId, session) {
@@ -226,27 +232,37 @@ FOS.publicOrder = {
       name: session.name || '',
       address: session.address || '',
       settlement_type: session.settlement_type || 'cash',
+      session_token: session.session_token || '',
     });
   },
 
-  clearCustomerSession(merchantId) {
-    FOS.storage.set(FOS.publicOrder.customerSessionKey(merchantId), null);
+  clearCustomerSession(merchantId, { revoke = false } = {}) {
+    const key = FOS.publicOrder.customerSessionKey(merchantId);
+    const token = FOS.storage.get(key)?.session_token;
+    FOS.storage.set(key, null);
+    if (revoke && token) FOS.publicOrder.revokeSession(token);
+  },
+
+  revokeSession(token) {
+    if (!token) return;
+    Promise.resolve(FOS.db.sb.rpc('fos_public_logout', { p_token: token })).catch(() => {});
   },
 
   async registerCustomer({ merchantId, phone, password, name, address }) {
-    const { data, error } = await FOS.db.sb.rpc('customer_account_register', {
-      p_payload: { merchant_id: merchantId, phone, password, name: name || '', address: address || '' },
+    const { data, error } = await FOS.db.sb.rpc('fos_customer_register', {
+      p: { merchant_id: merchantId, phone, password, name: name || '', address: address || '' },
     });
     if (error) throw error;
-    return data;
+    return data; // 含 session_token
   },
 
   async loginCustomer({ merchantId, phone, password }) {
-    const { data, error } = await FOS.db.sb.rpc('customer_account_login', {
-      p_payload: { merchant_id: merchantId, phone, password },
+    const { data, error } = await FOS.db.sb.rpc('fos_customer_login', {
+      p: { merchant_id: merchantId, phone, password },
     });
     if (error) throw error;
-    return data;
+    if (!data?.ok) throw new Error(data?.error || 'customer_login_invalid');
+    return { ...data.customer, session_token: data.session_token };
   },
 
   buildLookupUrl(loc = window.location) {
@@ -325,16 +341,17 @@ FOS.publicOrder = {
   },
 
   async loginShopChannel({ merchantId, loginId, password, shopId } = {}) {
-    const { data, error } = await FOS.db.sb.rpc('shop_channel_login', {
-      p_payload: {
+    const { data, error } = await FOS.db.sb.rpc('fos_shop_login', {
+      p: {
         merchant_id: merchantId,
-        login_id: loginId,
+        login_id: loginId || '',
         password,
         shop_id: shopId || '',
       },
     });
     if (error) throw error;
-    return data;
+    if (!data?.ok) throw new Error(data?.error || 'shop_login_invalid');
+    return { ...data.shop, session_token: data.session_token };
   },
 
   shopSessionKey(merchantId, channelId) {
@@ -342,7 +359,13 @@ FOS.publicOrder = {
   },
 
   loadShopSession(merchantId, channelId) {
-    return FOS.storage.get(FOS.publicOrder.shopSessionKey(merchantId, channelId));
+    const session = FOS.storage.get(FOS.publicOrder.shopSessionKey(merchantId, channelId));
+    // 旧版本在浏览器里保存了明文密码：立即清除，要求重新登录
+    if (session && (!session.session_token || session.password)) {
+      FOS.publicOrder.clearShopSession(merchantId, channelId);
+      return null;
+    }
+    return session;
   },
 
   saveShopSession(merchantId, channelId, session) {
@@ -353,12 +376,15 @@ FOS.publicOrder = {
       phone: session.phone || '',
       contact_name: session.contact_name || '',
       settlement_type: session.settlement_type || 'monthly',
-      password: session.password || '',
+      session_token: session.session_token || '',
     });
   },
 
-  clearShopSession(merchantId, channelId) {
-    FOS.storage.set(FOS.publicOrder.shopSessionKey(merchantId, channelId), null);
+  clearShopSession(merchantId, channelId, { revoke = false } = {}) {
+    const key = FOS.publicOrder.shopSessionKey(merchantId, channelId);
+    const token = FOS.storage.get(key)?.session_token;
+    FOS.storage.set(key, null);
+    if (revoke && token) FOS.publicOrder.revokeSession(token);
   },
 
   paymentTypeLabel(order) {
@@ -368,11 +394,12 @@ FOS.publicOrder = {
     return '—';
   },
 
-  async listCustomerOrders({ merchantId, phone, channelId }) {
-    const { data, error } = await FOS.db.sb.rpc('list_customer_orders', {
-      p_payload: {
+  async listCustomerOrders({ merchantId, sessionToken, channelId }) {
+    // 手机号由服务器根据会话令牌确定，不能只凭手机号查询他人订单
+    const { data, error } = await FOS.db.sb.rpc('fos_customer_orders', {
+      p: {
         merchant_id: merchantId,
-        phone,
+        session_token: sessionToken || '',
         channel_id: channelId || '',
       },
     });
@@ -403,7 +430,11 @@ FOS.publicOrder = {
       shop_login_invalid: FOS.i18n.t('店舗IDまたはパスワードが違います', '店铺账号或密码错误'),
       shop_settlement_mismatch: FOS.i18n.t('このQRは月払い店舗専用です', '此二维码仅限月结店铺登录'),
       phone_password_required: FOS.i18n.t('電話番号とパスワードを入力してください', '请输入手机号和密码'),
-      password_too_short: FOS.i18n.t('パスワードは4文字以上', '密码至少 4 位'),
+      password_too_short: FOS.i18n.t('パスワードは6文字以上', '密码至少 6 位'),
+      too_many_attempts: FOS.i18n.t('試行回数が多すぎます。15分後に再試行してください', '尝试次数过多，请 15 分钟后再试'),
+      shop_session_expired: FOS.i18n.t('ログインの有効期限が切れました。再ログインしてください', '登录已过期，请重新登录'),
+      customer_session_expired: FOS.i18n.t('ログインの有効期限が切れました。再ログインしてください', '登录已过期，请重新登录'),
+      merchant_not_found: FOS.i18n.t('店舗は利用できません', '店铺暂不可用'),
       phone_already_registered: FOS.i18n.t('この電話番号は登録済みです', '该手机号已注册，请直接登录'),
       customer_login_invalid: FOS.i18n.t('電話番号またはパスワードが違います', '手机号或密码错误'),
       address_required: FOS.i18n.t('住所を入力してください', '请填写地址'),

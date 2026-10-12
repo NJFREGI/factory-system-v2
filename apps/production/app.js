@@ -155,6 +155,7 @@
     const isDelivery = FOS.auth.user.role === 'delivery';
     applyProductionChrome();
     const nav = navForRole();
+    if (FOS.native?.bluetoothListPaired) nav.push({ id: 'bluetooth', icon: 'settings', label: FOS.i18n.t('Bluetooth印刷', '蓝牙打印') });
     FOS.shell.mount({
       appId: 'production',
       brand: {
@@ -167,6 +168,10 @@
       nav,
       pageTitle: nav[0].label,
       onNavigate: (id) => {
+        if (id === 'bluetooth') {
+          FOS.printerSettings.configureBluetooth().catch(e => FOS.ui.toast(e.message, 'error'));
+          return;
+        }
         currentView = id || currentView;
         renderCurrentView();
       },
@@ -439,6 +444,7 @@
       FOS.ui.showLoading();
       try {
         await FOS.orders.saveEdit(orderId, {
+          expected_updated_at: order.updated_at,
           status: document.getElementById('editStatus').value,
           factoryNote: document.getElementById('editFactoryNote').value,
           items: editItems,

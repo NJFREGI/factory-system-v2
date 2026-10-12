@@ -362,40 +362,6 @@
     document.getElementById('shopLoginSubmit')?.addEventListener('click', () => submitShopLogin('monthly'));
   }
 
-  async function findShopUser(login, pass, shopId = '') {
-    const merchantId = ctx.merchant.id;
-    const base = FOS.db.sb.from('users').select('*')
-      .eq('password_hash', pass)
-      .eq('role', 'order')
-      .eq('active', true)
-      .eq('merchant_id', merchantId);
-    if (shopId) {
-      const { data: byQr } = await base.eq('id', shopId).maybeSingle();
-      if (byQr) return byQr;
-    }
-    const { data: byId } = await base.eq('id', login).maybeSingle();
-    if (byId) return byId;
-    const phone = login.replace(/\s/g, '');
-    if (phone) {
-      const { data: byPhone } = await FOS.db.sb.from('users').select('*')
-        .eq('password_hash', pass)
-        .eq('role', 'order')
-        .eq('active', true)
-        .eq('merchant_id', merchantId)
-        .eq('phone', phone)
-        .maybeSingle();
-      if (byPhone) return byPhone;
-    }
-    const { data: byName } = await FOS.db.sb.from('users').select('*')
-      .eq('password_hash', pass)
-      .eq('role', 'order')
-      .eq('active', true)
-      .eq('merchant_id', merchantId)
-      .eq('name', login)
-      .maybeSingle();
-    return byName;
-  }
-
   async function loginShopAccount(login, pass, shopId = '') {
     try {
       return await FOS.publicOrder.loginShopChannel({
@@ -408,14 +374,12 @@
       const msg = String(e?.message || e?.code || '');
       if (/PGRST202|42883|does not exist|schema cache/i.test(msg)) {
         FOS.ui.toast(FOS.i18n.t(
-          '店舗ログイン機能が未設定です。管理者に schema-channel-shop-order.sql の実行を依頼してください',
-          '店铺登录功能未配置，请联系管理员在 Supabase 执行 schema-channel-shop-order.sql'
+          '店舗ログイン機能が未設定です。管理者に security-01-prepare.sql の実行を依頼してください',
+          '店铺登录功能未配置，请联系管理员在 Supabase 执行 security-01-prepare.sql'
         ), 'error');
         return null;
       }
-      if (/shop_channel_login/i.test(msg)) {
-        return findShopUser(login, pass, shopId || urlParams?.shopId || '');
-      }
+      if (/shop_login_invalid/i.test(msg)) return null;
       throw e;
     }
   }
@@ -440,7 +404,8 @@
         FOS.ui.toast(FOS.i18n.t('このQRは月払い店舗専用です', '此二维码仅限月结店铺登录'), 'error');
         return;
       }
-      FOS.publicOrder.saveShopSession(ctx.merchant.id, ctx.channel.id, { ...data, password: pass });
+      // 只保存服务器签发的会话令牌，不在浏览器保存密码
+      FOS.publicOrder.saveShopSession(ctx.merchant.id, ctx.channel.id, data);
       shopSession = FOS.publicOrder.loadShopSession(ctx.merchant.id, ctx.channel.id);
       orderMode = 'shop';
       cart = FOS.storage.get(CART_KEY()) || [];
@@ -490,14 +455,14 @@
     document.getElementById('customerOrdersBtn')?.addEventListener('click', () => renderCustomerOrders());
     document.getElementById('customerShopBtn')?.addEventListener('click', () => renderShop());
     document.getElementById('customerLogoutBtn')?.addEventListener('click', () => {
-      FOS.publicOrder.clearCustomerSession(ctx.merchant.id);
+      FOS.publicOrder.clearCustomerSession(ctx.merchant.id, { revoke: true });
       customerSession = null;
       orderMode = null;
       cart = [];
       renderCustomerAuth();
     });
     document.getElementById('shopLogoutBtn')?.addEventListener('click', () => {
-      FOS.publicOrder.clearShopSession(ctx.merchant.id, ctx.channel.id);
+      FOS.publicOrder.clearShopSession(ctx.merchant.id, ctx.channel.id, { revoke: true });
       shopSession = null;
       orderMode = null;
       cart = [];
@@ -929,8 +894,7 @@
     const note = document.getElementById('custNote')?.value?.trim();
     const payload = {
       channel_id: ctx.channel.id,
-      shop_login_id: shopSession.id,
-      shop_password: shopSession.password,
+      shop_session_token: shopSession.session_token,
       note: note || null,
       items: cart.map((item) => ({ product_id: item.product_id, qty: item.qty })),
     };
@@ -946,6 +910,13 @@
       renderShopSuccess(result);
     } catch (e) {
       FOS.ui.toast(FOS.publicOrder.mapRpcError(e), 'error');
+      if (/shop_session_expired|shop_login_required/.test(e?.message || '')) {
+        FOS.publicOrder.clearShopSession(ctx.merchant.id, ctx.channel.id);
+        shopSession = null;
+        orderMode = null;
+        FOS.ui.closeModal();
+        renderShopLogin({ settlement: 'monthly', forced: entrySettlement === 'monthly', shopId: urlParams?.shopId });
+      }
     } finally {
       submitting = false;
       if (submitBtn) submitBtn.disabled = false;
@@ -1158,7 +1129,7 @@
     try {
       const list = await FOS.publicOrder.listCustomerOrders({
         merchantId: ctx.merchant.id,
-        phone: customerSession.phone,
+        sessionToken: customerSession.session_token,
       });
       if (!list.length) {
         el.innerHTML = FOS.ui.empty('📋', FOS.i18n.t('注文履歴がありません', '暂无订单'));
@@ -1167,6 +1138,14 @@
       el.innerHTML = list.map((o) => orderCardHtml(o)).join('');
       bindOrderHistoryCards(el);
     } catch (e) {
+      if (/customer_session_expired/.test(e?.message || '')) {
+        FOS.publicOrder.clearCustomerSession(ctx.merchant.id);
+        customerSession = null;
+        orderMode = null;
+        FOS.ui.toast(FOS.publicOrder.mapRpcError(e), 'error');
+        renderCustomerAuth();
+        return;
+      }
       el.innerHTML = `<div class="alert alert--warn">${FOS.fmt.escapeHtml(FOS.publicOrder.mapRpcError(e))}</div>`;
     } finally {
       FOS.ui.hideLoading();

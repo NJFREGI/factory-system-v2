@@ -36,6 +36,11 @@ FOS.merchants = {
     if (FOS.merchants._schemaReady !== null) return FOS.merchants._schemaReady;
     try {
       const { error } = await FOS.db.sb.from('merchants').select('id').limit(1);
+      const denied = error && /permission denied|42501/i.test(`${error.message || ''} ${error.code || ''}`);
+      if (denied) {
+        // 未登录时无权读取（RLS）：表存在，但不缓存结果，登录后重新判断
+        return true;
+      }
       if (error && FOS.merchants._isSchemaError(error)) {
         FOS.merchants._schemaReady = false;
       } else {
@@ -72,6 +77,7 @@ FOS.merchants = {
 
   clearCache() {
     FOS.merchants._cache = {};
+    FOS.merchants._schemaReady = null;
   },
 
   async getById(merchantId) {
@@ -244,10 +250,11 @@ FOS.merchants = {
   async getRoleUser(merchantId, role) {
     const { data, error } = await FOS.db.sb
       .from('users')
-      .select('id, name, password_hash, active')
+      .select('id, name, active')
       .eq('merchant_id', merchantId)
       .eq('role', role)
       .eq('active', true)
+      .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -262,6 +269,43 @@ FOS.merchants = {
     return FOS.merchants.getRoleUser(merchantId, FOS.CONFIG.ROLES.DELIVERY);
   },
 
+  /**
+   * 新建 / 更新 / 复活账号（数据库 RPC fos_save_account 负责权限、商家归属、套餐上限、密码哈希）
+   * @param {object} p {id, name, role, password?, merchantId?, create?, address?, zip_code?, phone?, contact_name?, settlement_type?}
+   */
+  async saveAccount(p) {
+    const payload = {
+      id: (p.id || '').trim(),
+      name: (p.name || '').trim(),
+      role: p.role,
+      create: !!p.create,
+    };
+    if ((p.password || '').trim()) payload.password = p.password.trim();
+    if (p.merchantId) payload.merchant_id = p.merchantId;
+    ['address', 'zip_code', 'phone', 'contact_name', 'settlement_type'].forEach((k) => {
+      if (p[k] !== undefined) payload[k] = p[k] == null ? '' : String(p[k]).trim();
+    });
+    const { data, error } = await FOS.db.sb.rpc('fos_save_account', { p: payload });
+    if (error) throw new Error(FOS.auth.errorMessage(error));
+    return data;
+  },
+
+  async setPassword(userId, password) {
+    const { error } = await FOS.db.sb.rpc('fos_set_password', {
+      p_user_id: (userId || '').trim(),
+      p_password: (password || '').trim(),
+    });
+    if (error) throw new Error(FOS.auth.errorMessage(error));
+  },
+
+  async setAccountActive(userId, active) {
+    const { error } = await FOS.db.sb.rpc('fos_set_account_active', {
+      p_user_id: (userId || '').trim(),
+      p_active: !!active,
+    });
+    if (error) throw new Error(FOS.auth.errorMessage(error));
+  },
+
   async saveRoleUser({ merchantId, userId, password, displayName, role, isCreate, optional, idRequiredMsg, passRequiredMsg }) {
     const uid = (userId || '').trim();
     if (!uid) {
@@ -272,71 +316,16 @@ FOS.merchants = {
       throw new Error(passRequiredMsg);
     }
 
+    // 与旧版一致：该商家已有此类账号时更新现有账号，否则新建
     const existing = await FOS.merchants.getRoleUser(merchantId, role);
-
-    if (!existing) {
-      const { data: byId, error: byIdErr } = await FOS.db.sb
-        .from('users')
-        .select('id, name, role, merchant_id, active')
-        .eq('id', uid)
-        .maybeSingle();
-      if (byIdErr) throw new Error(byIdErr.message);
-
-      if (byId) {
-        if (byId.role !== role) {
-          throw new Error(
-            FOS.i18n.t('このIDは別の種類のアカウントです', '该 ID 已被其他类型账号占用')
-          );
-        }
-        if (byId.merchant_id && byId.merchant_id !== merchantId) {
-          throw new Error(
-            FOS.i18n.t('このIDは他の商家で使用中です', '该 ID 已被其他商家占用')
-          );
-        }
-        if (byId.active) {
-          throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
-        }
-        const { error: reviveErr } = await FOS.db.sb
-          .from('users')
-          .update({
-            name: displayName || byId.name || merchantId,
-            role,
-            password_hash: password.trim(),
-            merchant_id: merchantId,
-            active: true,
-          })
-          .eq('id', uid);
-        if (reviveErr) throw new Error(reviveErr.message);
-        return;
-      }
-
-      await FOS.merchants.assertCanAddUserForMerchant(merchantId);
-      const { error } = await FOS.db.sb.from('users').insert({
-        id: uid,
-        name: displayName || merchantId,
-        role,
-        password_hash: password.trim(),
-        merchant_id: merchantId,
-        active: true,
-      });
-      if (error) {
-        if (/duplicate|unique|23505/i.test(`${error.message} ${error.code || ''}`)) {
-          throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
-        }
-        throw new Error(error.message);
-      }
-      return;
-    }
-
-    const update = {
-      name: displayName || existing.name,
-      merchant_id: merchantId,
-      active: true,
-    };
-    if ((password || '').trim()) update.password_hash = password.trim();
-
-    const { error } = await FOS.db.sb.from('users').update(update).eq('id', existing.id);
-    if (error) throw new Error(error.message);
+    await FOS.merchants.saveAccount({
+      id: existing ? existing.id : uid,
+      name: displayName || existing?.name || merchantId,
+      role,
+      password,
+      merchantId,
+      create: !existing,
+    });
   },
 
   async saveFactoryAdmin({ merchantId, userId, password, displayName, isCreate }) {
@@ -420,50 +409,19 @@ FOS.merchants = {
   },
 
   async createDriver({ merchantId, userId, password, displayName, phone }) {
-    const mid = merchantId || FOS.merchants.resolveMerchantId(FOS.auth?.user);
     const uid = (userId || '').trim();
     const pass = (password || '').trim();
     if (!uid) throw new Error(FOS.i18n.t('配送員IDを入力してください', '请填写配送员 ID'));
     if (!pass) throw new Error(FOS.i18n.t('パスワードを設定してください', '请设置密码'));
-
-    const { data: byId, error: byIdErr } = await FOS.db.sb
-      .from('users')
-      .select('id, role, merchant_id, active')
-      .eq('id', uid)
-      .maybeSingle();
-    if (byIdErr) throw new Error(byIdErr.message);
-
-    if (byId) {
-      const reusable =
-        byId.role === FOS.CONFIG.ROLES.DELIVERY &&
-        byId.active === false &&
-        (!byId.merchant_id || byId.merchant_id === mid);
-      if (!reusable) {
-        throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
-      }
-    }
-
-    await FOS.merchants.assertCanAddDriver(mid);
-
-    const payload = {
+    await FOS.merchants.saveAccount({
       id: uid,
       name: (displayName || '').trim() || uid,
-      phone: (phone || '').trim() || null,
+      phone: (phone || '').trim(),
       role: FOS.CONFIG.ROLES.DELIVERY,
-      password_hash: pass,
-      merchant_id: mid,
-      active: true,
-    };
-
-    const result = byId
-      ? await FOS.db.sb.from('users').update(payload).eq('id', uid)
-      : await FOS.db.sb.from('users').insert(payload);
-    if (result.error) {
-      if (/duplicate|unique|23505/i.test(`${result.error.message} ${result.error.code || ''}`)) {
-        throw new Error(FOS.i18n.t('このIDは既に使用されています', '该账号 ID 已被占用'));
-      }
-      throw new Error(result.error.message);
-    }
+      password: pass,
+      merchantId: FOS.merchants.isSuperAdmin(FOS.auth?.user) ? merchantId : undefined,
+      create: true,
+    });
   },
 
   async updateDriver({ userId, displayName, password, phone }) {
@@ -472,21 +430,19 @@ FOS.merchants = {
     const update = {};
     if (displayName != null) update.name = (displayName || '').trim() || uid;
     if (phone != null) update.phone = (phone || '').trim() || null;
-    if ((password || '').trim()) update.password_hash = password.trim();
-    if (!Object.keys(update).length) return;
-    const { error } = await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('users').update(update).eq('id', uid).eq('role', FOS.CONFIG.ROLES.DELIVERY)
-    );
-    if (error) throw new Error(error.message);
+    if (Object.keys(update).length) {
+      const { error } = await FOS.merchants.scopeFilter(
+        FOS.db.sb.from('users').update(update).eq('id', uid).eq('role', FOS.CONFIG.ROLES.DELIVERY)
+      );
+      if (error) throw new Error(error.message);
+    }
+    if ((password || '').trim()) await FOS.merchants.setPassword(uid, password);
   },
 
   async deleteDriver(userId) {
     const uid = (userId || '').trim();
     if (!uid) return;
-    const { error } = await FOS.merchants.scopeFilter(
-      FOS.db.sb.from('users').update({ active: false }).eq('id', uid).eq('role', FOS.CONFIG.ROLES.DELIVERY)
-    );
-    if (error) throw new Error(error.message);
+    await FOS.merchants.setAccountActive(uid, false);
   },
 
   async assertCanAddProduct(addCount = 1) {
